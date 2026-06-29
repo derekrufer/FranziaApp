@@ -4,9 +4,10 @@ WORKDIR /app
 
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ARG PNPM_VERSION=10.14.0
 
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN corepack enable && corepack prepare pnpm@11.0.7 --activate && pnpm install --frozen-lockfile
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN npm install -g pnpm@${PNPM_VERSION} && pnpm install --frozen-lockfile
 
 COPY frontend/index.html ./
 COPY frontend/src ./src

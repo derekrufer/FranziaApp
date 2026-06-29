@@ -4,9 +4,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=4000
+ARG PNPM_VERSION=10.14.0
 
 COPY backend/package.json backend/pnpm-lock.yaml ./
-RUN corepack enable && corepack prepare pnpm@11.0.7 --activate && pnpm install --prod --frozen-lockfile
+RUN npm install -g pnpm@${PNPM_VERSION} && pnpm install --prod --frozen-lockfile
 
 COPY backend/src ./src
 COPY database/schema.sql /database/schema.sql
