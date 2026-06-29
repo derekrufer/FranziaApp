@@ -86,7 +86,7 @@ export function getDraftState() {
   return {
     draft: {
       id: "2026-main",
-      name: "RotoBaller Keeper Draft",
+      name: "Franzia Keeper Draft",
       roundCount: ROUND_COUNT,
       status: "live"
     },

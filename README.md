@@ -1,4 +1,4 @@
-# Fantasy Keeper Draft App
+# Franzia Keeper Draft App
 
 A starter web app for a 12-team fantasy football keeper draft.
 
@@ -110,6 +110,16 @@ docker compose down
 ```
 
 This stops the app but keeps the PostgreSQL named volume.
+
+If PostgreSQL failed during first-time initialization because the init SQL file was mounted incorrectly, remove the failed database volume before redeploying. PostgreSQL only runs files in `/docker-entrypoint-initdb.d` the first time it creates the database directory.
+
+```powershell
+docker compose down
+docker volume rm fantasy-draft-postgres-data
+docker compose up -d
+```
+
+Only remove this volume when you are intentionally wiping a failed or test database. Back up production data before removing any PostgreSQL volume.
 
 ### 5. View Logs
 

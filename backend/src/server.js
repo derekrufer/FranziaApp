@@ -26,6 +26,7 @@ import {
   markDraftAsSourceForNextYear,
   editPostgresPick,
   makePostgresPick,
+  registerAccount,
   recordFleaflickerSyncRun,
   rejectPlayerMatch,
   resetPostgresDraftedPicks,
@@ -472,6 +473,20 @@ app.post("/api/auth/login", asyncRoute(async (request, response) => {
   }
 
   response.json(await loginAccount({
+    email: request.body?.email,
+    password: request.body?.password
+  }));
+}));
+
+app.post("/api/auth/register", asyncRoute(async (request, response) => {
+  const database = await getDatabaseStatus();
+  if (!database.connected) {
+    response.status(400).json({ error: "PostgreSQL is required for accounts." });
+    return;
+  }
+
+  response.status(201).json(await registerAccount({
+    name: request.body?.name,
     email: request.body?.email,
     password: request.body?.password
   }));

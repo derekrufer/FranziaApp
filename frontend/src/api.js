@@ -50,6 +50,11 @@ export async function loginAccount(email, password) {
   return response.data;
 }
 
+export async function registerAccount(name, email, password) {
+  const response = await axios.post(`${API_BASE_URL}/api/auth/register`, { name, email, password });
+  return response.data;
+}
+
 export async function fetchCurrentUser(token) {
   const response = await axios.get(`${API_BASE_URL}/api/auth/me`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined

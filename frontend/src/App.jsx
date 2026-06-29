@@ -15,6 +15,7 @@ import {
   importCsv,
   loginAccount,
   logoutAccount,
+  registerAccount,
   resetDraft,
   resetAccountPassword,
   saveDraftOrder,
@@ -1715,6 +1716,8 @@ function AccountAdminPanel({ database, teams, currentUser }) {
 }
 
 function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated, onLoggedOut }) {
+  const [authMode, setAuthMode] = useState("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
@@ -1724,12 +1727,15 @@ function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated,
     setBusyAction(action);
     setMessage("");
     try {
-      const result = action === "set-password"
-        ? await setAccountPassword(email, password)
-        : await loginAccount(email, password);
+      const result = action === "register"
+        ? await registerAccount(name, email, password)
+        : action === "set-password"
+          ? await setAccountPassword(email, password)
+          : await loginAccount(email, password);
       onAuthenticated(result);
+      setName("");
       setPassword("");
-      setMessage(action === "set-password" ? "Password set and logged in." : "Logged in.");
+      setMessage(action === "register" ? "Account created and logged in." : action === "set-password" ? "Password set and logged in." : "Logged in.");
     } catch (caught) {
       setMessage(caught.response?.data?.error ?? caught.message);
     } finally {
@@ -1756,11 +1762,13 @@ function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated,
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Account</p>
-          <h2>Login</h2>
+          <h2>{authMode === "register" ? "Create Account" : "Login"}</h2>
         </div>
       </div>
       <p className="panel-note">
-        Log in to make picks, manage keepers, sync Fleaflicker data, or use commissioner tools based on your account permissions.
+        {authMode === "register"
+          ? "Create an account to join the draft. The first registered account becomes the initial commissioner."
+          : "Log in to make picks, manage keepers, sync Fleaflicker data, or use commissioner tools based on your account permissions."}
       </p>
 
       {currentUser ? (
@@ -1776,6 +1784,26 @@ function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated,
         </div>
       ) : (
         <div className="auth-grid">
+          <div className="auth-mode-switch">
+            <button type="button" className={authMode === "login" ? "active" : ""} disabled={Boolean(busyAction)} onClick={() => {
+              setAuthMode("login");
+              setMessage("");
+            }}>
+              Login
+            </button>
+            <button type="button" className={authMode === "register" ? "active" : ""} disabled={Boolean(busyAction)} onClick={() => {
+              setAuthMode("register");
+              setMessage("");
+            }}>
+              Create Account
+            </button>
+          </div>
+          {authMode === "register" && (
+            <label>
+              Name
+              <input value={name} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setName(event.target.value)} />
+            </label>
+          )}
           <label>
             Email
             <input value={email} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setEmail(event.target.value)} />
@@ -1785,12 +1813,20 @@ function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated,
             <input type="password" value={password} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setPassword(event.target.value)} />
           </label>
           <div className="auth-actions">
-            <button className="secondary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("set-password")}>
-              {busyAction === "set-password" ? "Setting..." : "Set Password"}
-            </button>
-            <button className="primary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("login")}>
-              {busyAction === "login" ? "Logging in..." : "Log In"}
-            </button>
+            {authMode === "register" ? (
+              <button className="primary-action" disabled={!database?.connected || Boolean(busyAction) || !name || !email || !password} onClick={() => handleAuth("register")}>
+                {busyAction === "register" ? "Creating..." : "Create Account"}
+              </button>
+            ) : (
+              <>
+                <button className="secondary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("set-password")}>
+                  {busyAction === "set-password" ? "Setting..." : "Set Password"}
+                </button>
+                <button className="primary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("login")}>
+                  {busyAction === "login" ? "Logging in..." : "Log In"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2474,7 +2510,7 @@ export default function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">RotoBaller Keeper League</p>
-            <h1>Fantasy Keeper Draft</h1>
+            <h1>Franzia Keeper Draft</h1>
           </div>
         </header>
         <LoginPage
@@ -2493,7 +2529,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">RotoBaller Keeper League</p>
-          <h1>Fantasy Keeper Draft</h1>
+          <h1>Franzia Keeper Draft</h1>
           <TopNavigation pages={visiblePages} selectedPage={selectedPage} onSelectPage={setSelectedPage} />
         </div>
         <div className="topbar-actions">

@@ -558,6 +558,32 @@ input {
   font-size: 0.78rem;
 }
 
+.auth-mode-switch {
+  background: #edf3ef;
+  border: 1px solid #dfe8e1;
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 3px;
+}
+
+.auth-mode-switch button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #59645a;
+  font-size: 0.78rem;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.auth-mode-switch button.active {
+  background: #ffffff;
+  color: #172018;
+  box-shadow: 0 1px 2px rgba(23, 32, 24, 0.08);
+}
+
 .account-admin-row {
   border: 1px solid #dfe8e1;
   border-radius: 6px;

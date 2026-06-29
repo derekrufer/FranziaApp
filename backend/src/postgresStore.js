@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { promisify } from "node:util";
 
 const DEFAULT_DRAFT = {
-  name: "RotoBaller Keeper Draft",
+  name: "Franzia Keeper Draft",
   season: 2026,
   roundCount: 19
 };
@@ -22,6 +22,8 @@ const SESSION_DAYS = 14;
 const pbkdf2 = promisify(crypto.pbkdf2);
 
 const AUDIT_LOG_EVENT_TYPES = [
+  "first_account_created",
+  "account_registered",
   "keepers_changed",
   "rankings_uploaded",
   "legacy_draft_uploaded",
@@ -88,6 +90,15 @@ const INITIAL_ACCOUNT_SEEDS = [
     teamName: "Dom",
     permissions: ["commissioner_admin", "sync_fleaflicker", "manage_rankings", "manage_keepers", "manage_draft", "view_audit_log"]
   }
+];
+
+const COMMISSIONER_PERMISSIONS = [
+  "commissioner_admin",
+  "manage_draft",
+  "manage_keepers",
+  "manage_rankings",
+  "sync_fleaflicker",
+  "view_audit_log"
 ];
 
 const FLEAFLICKER_OWNER_TO_LOCAL_NAME = new Map([
@@ -391,6 +402,22 @@ function validatePasswordInput(password) {
   return value;
 }
 
+function normalizeEmailInput(email) {
+  const value = String(email ?? "").trim().toLowerCase();
+  if (!value || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    throw new Error("A valid email is required.");
+  }
+  return value;
+}
+
+function normalizeDisplayNameInput(name) {
+  const value = String(name ?? "").trim();
+  if (!value) {
+    throw new Error("Name is required.");
+  }
+  return value;
+}
+
 export async function getAccounts() {
   return withDb(async (client) => (await getAccountRows(client)).map(publicAccount));
 }
@@ -469,7 +496,7 @@ export async function resetAccountPasswordAdmin(accountId) {
 
 export async function setAccountPassword({ email, password }) {
   return withDb(async (client) => {
-    const normalizedEmail = String(email ?? "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmailInput(email);
     const passwordValue = validatePasswordInput(password);
     const rows = await getAccountRows(client, "WHERE lower(u.email) = lower($1) AND u.is_active = true", [normalizedEmail]);
     const account = rows[0];
@@ -488,9 +515,66 @@ export async function setAccountPassword({ email, password }) {
   });
 }
 
+export async function registerAccount({ name, email, password }) {
+  return withDb(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('fantasy_draft_register_account'))");
+
+    const displayName = normalizeDisplayNameInput(name);
+    const normalizedEmail = normalizeEmailInput(email);
+    const passwordValue = validatePasswordInput(password);
+
+    const duplicate = await client.query(
+      `SELECT email, display_name
+       FROM app_users
+       WHERE lower(email) = lower($1) OR lower(display_name) = lower($2)
+       LIMIT 1`,
+      [normalizedEmail, displayName]
+    );
+    if (duplicate.rows[0]?.email?.toLowerCase() === normalizedEmail) {
+      throw new Error("An account already exists for that email.");
+    }
+    if (duplicate.rows[0]) {
+      throw new Error("An account already exists for that name.");
+    }
+
+    const countResult = await client.query("SELECT COUNT(*)::int AS count FROM app_users");
+    const isFirstAccount = Number(countResult.rows[0]?.count ?? 0) === 0;
+    const passwordHash = await hashPassword(passwordValue);
+    const inserted = await client.query(
+      `INSERT INTO app_users (email, display_name, password_hash, is_active, updated_at)
+       VALUES ($1, $2, $3, true, now())
+       RETURNING id`,
+      [normalizedEmail, displayName, passwordHash]
+    );
+    const userId = inserted.rows[0].id;
+
+    const permissions = isFirstAccount ? COMMISSIONER_PERMISSIONS : [];
+    for (const permission of permissions) {
+      await client.query(
+        `INSERT INTO user_permissions (user_id, permission)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id, permission) DO NOTHING`,
+        [userId, permission]
+      );
+    }
+
+    const draft = await getOrCreateDraft(client, DEFAULT_DRAFT.season);
+    await recordDraftEvent(client, draft.id, isFirstAccount ? "first_account_created" : "account_registered", {
+      userId,
+      email: normalizedEmail,
+      displayName,
+      permissions
+    }, { actorUserId: userId, actorLabel: displayName });
+
+    const session = await createSession(client, userId);
+    const account = (await getAccountRows(client, "WHERE u.id = $1", [userId]))[0];
+    return { user: publicAccount(account), ...session };
+  });
+}
+
 export async function loginAccount({ email, password }) {
   return withDb(async (client) => {
-    const normalizedEmail = String(email ?? "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmailInput(email);
     const rows = await getAccountRows(client, "WHERE lower(u.email) = lower($1) AND u.is_active = true", [normalizedEmail]);
     const account = rows[0];
     if (!account?.password_hash || !(await verifyPassword(String(password ?? ""), account.password_hash))) {
