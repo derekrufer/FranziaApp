@@ -1,0 +1,40 @@
+export const teams = [
+  { id: "bump", name: "Bump", ownerName: "Bump" },
+  { id: "nick", name: "Nick", ownerName: "Nick" },
+  { id: "dom", name: "Dom", ownerName: "Dom" },
+  { id: "jared", name: "Jared", ownerName: "Jared" },
+  { id: "lance", name: "Lance", ownerName: "Lance" },
+  { id: "mitch", name: "Mitch", ownerName: "Mitch" },
+  { id: "kevin", name: "Kevin", ownerName: "Kevin" },
+  { id: "jeremy", name: "Jeremy", ownerName: "Jeremy" },
+  { id: "derek", name: "Derek", ownerName: "Derek" },
+  { id: "hunter", name: "Hunter", ownerName: "Hunter" },
+  { id: "eric", name: "Eric", ownerName: "Eric" },
+  { id: "tyler", name: "Tyler", ownerName: "Tyler" }
+];
+
+export const players = [
+  { id: "bijan-robinson", name: "Bijan Robinson", position: "RB", nflTeam: "ATL", byeWeek: 5, rank: 1, lastYearDraftRound: 1, originalDraftTeamId: "bump" },
+  { id: "saquon-barkley", name: "Saquon Barkley", position: "RB", nflTeam: "PHI", byeWeek: 9, rank: 2, lastYearDraftRound: 1, originalDraftTeamId: "nick" },
+  { id: "jamar-chase", name: "Ja'Marr Chase", position: "WR", nflTeam: "CIN", byeWeek: 10, rank: 3, lastYearDraftRound: 1, originalDraftTeamId: "dom" },
+  { id: "christian-mccaffrey", name: "Christian McCaffrey", position: "RB", nflTeam: "SF", byeWeek: 14, rank: 4, lastYearDraftRound: 1, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "drake-london", name: "Drake London", position: "WR", nflTeam: "ATL", byeWeek: 5, rank: 5, lastYearDraftRound: 1, originalDraftTeamId: "tyler", endOfSeasonTeamId: "derek" },
+  { id: "brock-bowers", name: "Brock Bowers", position: "TE", nflTeam: "LV", byeWeek: 8, rank: 6, lastYearDraftRound: 2, originalDraftTeamId: "bump" },
+  { id: "devon-achane", name: "De'Von Achane", position: "RB", nflTeam: "MIA", byeWeek: 12, rank: 7, lastYearDraftRound: 3, originalDraftTeamId: "tyler", endOfSeasonTeamId: "derek" },
+  { id: "jalen-hurts", name: "Jalen Hurts", position: "QB", nflTeam: "PHI", byeWeek: 9, rank: 18, lastYearDraftRound: 5, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "chase-brown", name: "Chase Brown", position: "RB", nflTeam: "CIN", byeWeek: 10, rank: 24, lastYearDraftRound: 12, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "rashee-rice", name: "Rashee Rice", position: "WR", nflTeam: "KC", byeWeek: 10, rank: 31, lastYearDraftRound: 10, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "tucker-kraft", name: "Tucker Kraft", position: "TE", nflTeam: "GB", byeWeek: 5, rank: 71, lastYearDraftRound: 9, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "jayden-higgins", name: "Jayden Higgins", position: "WR", nflTeam: "HOU", byeWeek: 6, rank: 88, lastYearDraftRound: 9, originalDraftTeamId: "jeremy", endOfSeasonTeamId: "derek" },
+  { id: "tyler-warren", name: "Tyler Warren", position: "TE", nflTeam: "IND", byeWeek: 11, rank: 93, lastYearDraftRound: 7, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "kyle-monangai", name: "Kyle Monangai", position: "RB", nflTeam: "CHI", byeWeek: 5, rank: 140, lastYearDraftRound: 14, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "isaac-teslaa", name: "Isaac TeSlaa", position: "WR", nflTeam: "DET", byeWeek: 8, rank: 160, lastYearDraftRound: 16, originalDraftTeamId: "derek", endOfSeasonTeamId: "derek" },
+  { id: "tory-horton", name: "Tory Horton", position: "WR", nflTeam: "SEA", byeWeek: 8, rank: 170, lastYearDraftRound: 18, originalDraftTeamId: "jeremy", endOfSeasonTeamId: "derek" },
+  { id: "parker-washington", name: "Parker Washington", position: "WR", nflTeam: "JAC", byeWeek: 8, rank: 180, lastYearDraftRound: null, originalDraftTeamId: null, endOfSeasonTeamId: "derek" },
+  { id: "giants-dst", name: "New York Giants DST", position: "DST", nflTeam: "NYG", byeWeek: 14, rank: 210, lastYearDraftRound: null, originalDraftTeamId: null, endOfSeasonTeamId: "derek" },
+  { id: "josh-allen", name: "Josh Allen", position: "QB", nflTeam: "BUF", byeWeek: 7, rank: 14, lastYearDraftRound: 3, originalDraftTeamId: "jared" },
+  { id: "lamar-jackson", name: "Lamar Jackson", position: "QB", nflTeam: "BAL", byeWeek: 7, rank: 16, lastYearDraftRound: 3, originalDraftTeamId: "eric" },
+  { id: "amon-ra-st-brown", name: "Amon-Ra St. Brown", position: "WR", nflTeam: "DET", byeWeek: 8, rank: 8, lastYearDraftRound: 11, originalDraftTeamId: "dom", endOfSeasonTeamId: "dom" },
+  { id: "nico-collins", name: "Nico Collins", position: "WR", nflTeam: "HOU", byeWeek: 6, rank: 11, lastYearDraftRound: 8, originalDraftTeamId: "hunter", endOfSeasonTeamId: "hunter" },
+  { id: "bucky-irving", name: "Bucky Irving", position: "RB", nflTeam: "TB", byeWeek: 9, rank: 34, lastYearDraftRound: 9, originalDraftTeamId: "dom", endOfSeasonTeamId: "dom" }
+];
