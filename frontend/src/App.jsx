@@ -64,6 +64,11 @@ const IMPORTS = [
     type: "players",
     label: "Player Pool",
     columns: "rank,name,position,nflTeam,byeWeek"
+  },
+  {
+    type: "last-year-draft-rounds",
+    label: "Last Year Draft Rounds CSV",
+    columns: "Headerless CSV. Row 1 = Round 1. Used only to determine keeper cost."
   }
 ];
 const ACCOUNT_PERMISSIONS = [
@@ -160,6 +165,8 @@ function PlayerRow({ player, displayRank, disabled, onPick }) {
 function CommissionerImports({ database, draftSeason, canManageRankings, auditActor, onImported }) {
   const [busyType, setBusyType] = useState("");
   const [message, setMessage] = useState("");
+  const [draftRoundPreview, setDraftRoundPreview] = useState([]);
+  const [draftRoundWarnings, setDraftRoundWarnings] = useState([]);
 
   async function handleFile(type, file) {
     if (!file) {
@@ -173,6 +180,12 @@ function CommissionerImports({ database, draftSeason, canManageRankings, auditAc
       const result = await importCsv(type, csv, draftSeason, auditActor);
       if (type === "players") {
         setMessage(`Saved ${result.count} player rankings to PostgreSQL.`);
+        setDraftRoundPreview([]);
+        setDraftRoundWarnings([]);
+      } else if (type === "last-year-draft-rounds") {
+        setDraftRoundPreview(result.preview ?? []);
+        setDraftRoundWarnings(result.warnings ?? []);
+        setMessage(`Imported ${result.count} last-year draft round rows for keeper-cost calculations.`);
       } else {
         setMessage(`Imported ${result.count} rows into ${type}.`);
       }
@@ -219,6 +232,40 @@ function CommissionerImports({ database, draftSeason, canManageRankings, auditAc
 
       {!canManageRankings && <div className="import-message">Log in with Manage Rankings permission to update rankings or source data.</div>}
       {message && <div className="import-message">{message}</div>}
+      {draftRoundWarnings.length > 0 && (
+        <div className="import-message warning-message">
+          <strong>Validation warnings</strong>
+          {draftRoundWarnings.map((warning) => (
+            <span key={warning}>{warning}</span>
+          ))}
+        </div>
+      )}
+      {draftRoundPreview.length > 0 && (
+        <div className="import-preview">
+          <div className="import-preview-heading">
+            <strong>Last Year Draft Rounds Preview</strong>
+            <span>Used only for keeper cost. Team ownership comes from end-of-season rosters.</span>
+          </div>
+          <div className="import-preview-table">
+            <div className="import-preview-row header">
+              <span>Round</span>
+              <span>Player</span>
+              <span>Pos</span>
+              <span>NFL</span>
+              <span>Bye</span>
+            </div>
+            {draftRoundPreview.map((row, index) => (
+              <div className="import-preview-row" key={`${row.round}-${row.playerName}-${index}`}>
+                <span>{row.round}</span>
+                <span>{row.playerName}</span>
+                <span>{row.position}</span>
+                <span>{row.nflTeam}</span>
+                <span>{row.byeWeek ?? ""}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

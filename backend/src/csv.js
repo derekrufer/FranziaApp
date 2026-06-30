@@ -14,7 +14,8 @@ export function parseCsv(text) {
   });
 }
 
-export function parseCsvRows(text) {
+export function parseCsvRows(text, options = {}) {
+  const preserveEmptyRows = Boolean(options.preserveEmptyRows);
   const rows = [];
   let row = [];
   let field = "";
@@ -37,7 +38,7 @@ export function parseCsvRows(text) {
         index += 1;
       }
       row.push(field.trim());
-      if (row.some((value) => value.length > 0)) {
+      if (preserveEmptyRows || row.some((value) => value.length > 0)) {
         rows.push(row);
       }
       row = [];
@@ -48,7 +49,7 @@ export function parseCsvRows(text) {
   }
 
   row.push(field.trim());
-  if (row.some((value) => value.length > 0)) {
+  if (preserveEmptyRows || row.some((value) => value.length > 0)) {
     rows.push(row);
   }
 

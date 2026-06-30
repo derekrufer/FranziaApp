@@ -1157,8 +1157,17 @@ function legacyDraftCellToPlayer(cell) {
   };
 }
 
+function normalizePlayerNameKey(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function legacyDraftGridRecords(csvText) {
-  return parseCsvRows(csvText).flatMap((row, rowIndex) => {
+  return parseCsvRows(csvText, { preserveEmptyRows: true }).flatMap((row, rowIndex) => {
     const round = rowIndex + 1;
     return row.map((cell, columnIndex) => {
       const teamName = LEGACY_2025_DRAFT_COLUMN_TEAMS[columnIndex] ?? "";
@@ -1187,6 +1196,26 @@ function tableDraftRecords(csvText) {
     byeWeek: numberOrNull(pick(record, ["bye_week", "bye"], "")),
     rank: numberOrNull(pick(record, ["rank"], ""))
   }));
+}
+
+function draftRoundOnlyRecords(csvText) {
+  return parseCsvRows(csvText, { preserveEmptyRows: true }).flatMap((row, rowIndex) => {
+    const round = rowIndex + 1;
+    return row
+      .map((cell) => {
+        const player = legacyDraftCellToPlayer(cell);
+        return player.playerName
+          ? {
+              playerName: player.playerName,
+              round,
+              position: player.position,
+              nflTeam: player.nflTeam,
+              byeWeek: player.byeWeek
+            }
+          : null;
+      })
+      .filter(Boolean);
+  });
 }
 
 export async function importLastYearDraft(csvText, draftSeason = DEFAULT_DRAFT.season, actor = {}) {
@@ -1228,6 +1257,76 @@ export async function importLastYearDraft(csvText, draftSeason = DEFAULT_DRAFT.s
     }
     await recordDraftEvent(client, draft.id, "legacy_draft_uploaded", { count, draftSeason: draft.season }, actor);
     return { count };
+  });
+}
+
+export async function importLastYearDraftRounds(csvText, draftSeason = DEFAULT_DRAFT.season, actor = {}) {
+  const records = draftRoundOnlyRecords(csvText);
+  const seenPlayers = new Map();
+  const duplicatePlayers = [];
+
+  for (const record of records) {
+    const key = normalizePlayerNameKey(record.playerName);
+    if (!key) {
+      continue;
+    }
+    const existing = seenPlayers.get(key);
+    if (existing) {
+      duplicatePlayers.push({
+        playerName: record.playerName,
+        rounds: Array.from(new Set([existing.round, record.round])).sort((a, b) => a - b)
+      });
+    } else {
+      seenPlayers.set(key, record);
+    }
+  }
+  const uniqueRecords = Array.from(seenPlayers.values());
+
+  return withDb(async (client) => {
+    const draft = await getOrCreateDraft(client, draftSeason);
+    await client.query("DELETE FROM last_year_draft_results WHERE draft_id = $1", [draft.id]);
+    let count = 0;
+
+    for (const record of uniqueRecords) {
+      const { playerName, round } = record;
+      if (!playerName || !round) {
+        continue;
+      }
+
+      const playerId = await upsertPlayer(client, {
+        name: playerName,
+        position: record.position ?? "UNK",
+        nflTeam: record.nflTeam ?? "FA",
+        byeWeek: record.byeWeek ?? null,
+        rank: null
+      });
+
+      await client.query(
+        `INSERT INTO last_year_draft_results (draft_id, player_id, drafted_team_id, round, pick_number)
+         VALUES ($1, $2, NULL, $3, NULL)
+         ON CONFLICT (draft_id, player_id)
+         DO UPDATE SET drafted_team_id = NULL, round = EXCLUDED.round, pick_number = NULL`,
+        [draft.id, playerId, round]
+      );
+      count += 1;
+    }
+
+    const preview = uniqueRecords.slice(0, 60).map((record) => ({
+      round: record.round,
+      playerName: record.playerName,
+      position: record.position,
+      nflTeam: record.nflTeam,
+      byeWeek: record.byeWeek
+    }));
+    const warnings = duplicatePlayers.map((duplicate) => `${duplicate.playerName} appears more than once (${duplicate.rounds.map((round) => `Round ${round}`).join(", ")}).`);
+
+    await recordDraftEvent(client, draft.id, "legacy_draft_uploaded", {
+      count,
+      draftSeason: draft.season,
+      sourceType: "draft_rounds_csv",
+      warnings
+    }, actor);
+    return { count, preview, warnings };
   });
 }
 

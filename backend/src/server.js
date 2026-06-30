@@ -16,6 +16,7 @@ import {
   importFleaflickerEndOfSeasonRosters,
   importFleaflickerTradedPicks,
   importLastYearDraft,
+  importLastYearDraftRounds,
   importPlayers,
   importRosters,
   importSelectedKeepers,
@@ -633,6 +634,7 @@ app.post("/api/imports/:type", asyncRoute(async (request, response) => {
     teams: importTeams,
     players: importPlayers,
     "last-year-draft": importLastYearDraft,
+    "last-year-draft-rounds": importLastYearDraftRounds,
     rosters: importRosters,
     keepers: importSelectedKeepers,
     "traded-picks": importTradedPicks
@@ -648,6 +650,7 @@ app.post("/api/imports/:type", asyncRoute(async (request, response) => {
     teams: "sync_fleaflicker",
     players: "manage_rankings",
     "last-year-draft": "manage_rankings",
+    "last-year-draft-rounds": "manage_rankings",
     rosters: "sync_fleaflicker",
     keepers: "manage_keepers",
     "traded-picks": "sync_fleaflicker"

@@ -62,11 +62,13 @@ CREATE TABLE IF NOT EXISTS last_year_draft_results (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draft_id UUID NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
   player_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  drafted_team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  drafted_team_id UUID REFERENCES teams(id) ON DELETE CASCADE,
   round INTEGER NOT NULL,
   pick_number INTEGER,
   UNIQUE (draft_id, player_id)
 );
+
+ALTER TABLE last_year_draft_results ALTER COLUMN drafted_team_id DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS end_of_year_rosters (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
