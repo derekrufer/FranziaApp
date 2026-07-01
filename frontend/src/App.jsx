@@ -97,6 +97,32 @@ function TopNavigation({ pages, selectedPage, onSelectPage }) {
   );
 }
 
+function CommissionerTabs({ tabs, activeTabId, onSelectTab }) {
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+
+  if (!activeTab) {
+    return null;
+  }
+
+  return (
+    <div className="commissioner-tabs">
+      <nav className="commissioner-tab-list" aria-label="Commissioner sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            className={tab.id === activeTab.id ? "active" : ""}
+            onClick={() => onSelectTab(tab.id)}
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <div className="commissioner-tab-panel">{activeTab.content}</div>
+    </div>
+  );
+}
+
 function mockLobbyTeamIdFor(teamId) {
   return teamId && teamId !== COMMISSIONER_ID && UUID_PATTERN.test(String(teamId)) ? teamId : null;
 }
@@ -2221,6 +2247,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState("");
   const [selectedPage, setSelectedPage] = useState("draft");
+  const [selectedCommissionerTab, setSelectedCommissionerTab] = useState("setup");
   const [selectedDraftSeason, setSelectedDraftSeason] = useState(2026);
   const [error, setError] = useState("");
   const [timerSeconds, setTimerSeconds] = useState(PICK_TIMER_SECONDS);
@@ -2405,6 +2432,9 @@ export default function App() {
   const canViewAuditLog = userHasPermission(currentUser, "view_audit_log");
   const canAdminAccounts = userHasPermission(currentUser, "commissioner_admin");
   const canAccessCommissioner = canManageDraft || canManageKeepers || canManageRankings || canSyncFleaflicker || canViewAuditLog;
+  const draftMode = state?.draft?.status === "mock" ? "mock" : "real";
+  const accountMockLobbyTeamId = mockLobbyTeamIdFor(currentUser?.teamId);
+  const mockLobbyTeamId = draftMode === "mock" ? accountMockLobbyTeamId : null;
   const visiblePages = useMemo(
     () => PAGES.filter((page) => {
       if (page.id === "login") {
@@ -2420,13 +2450,126 @@ export default function App() {
     }),
     [canAccessCommissioner]
   );
-  const draftMode = state?.draft?.status === "mock" ? "mock" : "real";
-  const accountMockLobbyTeamId = mockLobbyTeamIdFor(currentUser?.teamId);
-  const mockLobbyTeamId = draftMode === "mock" ? accountMockLobbyTeamId : null;
   const auditActor = {
     actorTeamId: currentUser?.teamId ?? null,
     actorLabel: currentUser?.displayName ?? "Unknown"
   };
+  const commissionerTabs = useMemo(() => [
+    (canSyncFleaflicker || canManageRankings) && {
+      id: "setup",
+      label: "Setup & Imports",
+      content: (
+        <>
+          <CommissionerImports database={state?.database} draftSeason={selectedDraftSeason} canManageRankings={canManageRankings} auditActor={auditActor} onImported={applyAuditedState} />
+          <FleaflickerSetupSync
+            database={state?.database}
+            draftSeason={selectedDraftSeason}
+            canSyncFleaflicker={canSyncFleaflicker}
+            auditActor={auditActor}
+            onDraftSeasonChange={setSelectedDraftSeason}
+            onSynced={applyAuditedState}
+            refreshKey={auditRefreshKey}
+          />
+          <FleaflickerRosterSync
+            database={state?.database}
+            canSyncFleaflicker={canSyncFleaflicker}
+            auditActor={auditActor}
+            onDraftSeasonChange={setSelectedDraftSeason}
+            onSynced={applyAuditedState}
+          />
+          <FleaflickerPickSync
+            database={state?.database}
+            canSyncFleaflicker={canSyncFleaflicker}
+            auditActor={auditActor}
+            onDraftSeasonChange={setSelectedDraftSeason}
+            onSynced={applyAuditedState}
+          />
+        </>
+      )
+    },
+    canAdminAccounts && {
+      id: "accounts",
+      label: "Accounts",
+      content: <AccountAdminPanel database={state?.database} teams={state?.teams ?? []} currentUser={currentUser} />
+    },
+    canManageDraft && {
+      id: "draft-management",
+      label: "Draft Management",
+      content: (
+        <>
+          <PickEditorPanel
+            database={state?.database}
+            draftSeason={selectedDraftSeason}
+            picks={state?.picks ?? []}
+            players={state?.players ?? []}
+            canManageDraft={canManageDraft}
+            auditActor={auditActor}
+            onSaved={applyAuditedState}
+          />
+          <DraftResetPanel
+            database={state?.database}
+            draftSeason={selectedDraftSeason}
+            picks={state?.picks ?? []}
+            draftMode={draftMode}
+            mockLobbyTeamId={mockLobbyTeamId}
+            canManageDraft={canManageDraft}
+            auditActor={auditActor}
+            onReset={setState}
+          />
+          <DraftFinalizePanel database={state?.database} draftSeason={selectedDraftSeason} picks={state?.picks ?? []} canManageDraft={canManageDraft} auditActor={auditActor} onFinalized={applyAuditedState} />
+          <DraftOrderEditor teams={state?.teams ?? []} database={state?.database} draftSeason={selectedDraftSeason} canManageDraft={canManageDraft} onSaved={setState} />
+        </>
+      )
+    },
+    canManageKeepers && {
+      id: "keepers",
+      label: "Keepers",
+      content: <KeeperDeadlinePanel database={state?.database} draft={state?.draft} canManageKeepers={canManageKeepers} auditActor={auditActor} onSaved={applyAuditedState} />
+    },
+    canAccessCommissioner && {
+      id: "exports",
+      label: "Exports",
+      content: (
+        <>
+          <ExportBackupPanel state={state} draftSeason={selectedDraftSeason} onDownloaded={announceExport} />
+          <FleaflickerEntryExport draftSeason={selectedDraftSeason} onDownloaded={announceExport} />
+        </>
+      )
+    },
+    canViewAuditLog && {
+      id: "audit-log",
+      label: "Audit Log",
+      content: <AuditLogPanel database={state?.database} draftSeason={selectedDraftSeason} refreshKey={auditRefreshKey} />
+    }
+  ].filter(Boolean), [
+    auditActor,
+    auditRefreshKey,
+    canAccessCommissioner,
+    canAdminAccounts,
+    canManageDraft,
+    canManageKeepers,
+    canManageRankings,
+    canSyncFleaflicker,
+    canViewAuditLog,
+    currentUser,
+    draftMode,
+    mockLobbyTeamId,
+    selectedDraftSeason,
+    state,
+    applyAuditedState,
+    announceExport
+  ]);
+
+  useEffect(() => {
+    if (!commissionerTabs.length) {
+      return;
+    }
+
+    if (!commissionerTabs.some((tab) => tab.id === selectedCommissionerTab)) {
+      setSelectedCommissionerTab(commissionerTabs[0].id);
+    }
+  }, [commissionerTabs, selectedCommissionerTab]);
+
   const selectedTeamCanPick = draftMode === "mock"
     ? Boolean(mockLobbyTeamId && currentUser)
     : canManageDraft || (currentUser?.teamId && currentPick?.currentOwnerTeamId === currentUser.teamId);
@@ -2629,72 +2772,7 @@ export default function App() {
       <div className="app-content">
           {selectedPage === "commissioner" && canAccessCommissioner ? (
             <section className="page-section">
-              <CommissionerImports database={state.database} draftSeason={selectedDraftSeason} canManageRankings={canManageRankings} auditActor={auditActor} onImported={applyAuditedState} />
-              <FleaflickerSetupSync
-                database={state.database}
-                draftSeason={selectedDraftSeason}
-                canSyncFleaflicker={canSyncFleaflicker}
-                auditActor={auditActor}
-                onDraftSeasonChange={setSelectedDraftSeason}
-                onSynced={applyAuditedState}
-                refreshKey={auditRefreshKey}
-              />
-              <FleaflickerRosterSync
-                database={state.database}
-                canSyncFleaflicker={canSyncFleaflicker}
-                auditActor={auditActor}
-                onDraftSeasonChange={setSelectedDraftSeason}
-                onSynced={applyAuditedState}
-              />
-              <FleaflickerPickSync
-                database={state.database}
-                canSyncFleaflicker={canSyncFleaflicker}
-                auditActor={auditActor}
-                onDraftSeasonChange={setSelectedDraftSeason}
-                onSynced={applyAuditedState}
-              />
-              {canAdminAccounts ? (
-                <AccountAdminPanel database={state.database} teams={state.teams} currentUser={currentUser} />
-              ) : (
-                <section className="commissioner-panel">
-                  <p className="eyebrow">Accounts</p>
-                  <h2>Account Admin</h2>
-                  <div className="import-message">Log in with Commissioner Admin permission to manage accounts.</div>
-                </section>
-              )}
-              <ExportBackupPanel state={state} draftSeason={selectedDraftSeason} onDownloaded={announceExport} />
-              <FleaflickerEntryExport draftSeason={selectedDraftSeason} onDownloaded={announceExport} />
-              <PickEditorPanel
-                database={state.database}
-                draftSeason={selectedDraftSeason}
-                picks={state.picks}
-                players={state.players ?? []}
-                canManageDraft={canManageDraft}
-                auditActor={auditActor}
-                onSaved={applyAuditedState}
-              />
-              <DraftResetPanel
-                database={state.database}
-                draftSeason={selectedDraftSeason}
-                picks={state.picks}
-                draftMode={draftMode}
-                mockLobbyTeamId={mockLobbyTeamId}
-                canManageDraft={canManageDraft}
-                auditActor={auditActor}
-                onReset={setState}
-              />
-              <DraftFinalizePanel database={state.database} draftSeason={selectedDraftSeason} picks={state.picks} canManageDraft={canManageDraft} auditActor={auditActor} onFinalized={applyAuditedState} />
-              <KeeperDeadlinePanel database={state.database} draft={state.draft} canManageKeepers={canManageKeepers} auditActor={auditActor} onSaved={applyAuditedState} />
-              <DraftOrderEditor teams={state.teams} database={state.database} draftSeason={selectedDraftSeason} canManageDraft={canManageDraft} onSaved={setState} />
-              {canViewAuditLog ? (
-                <AuditLogPanel database={state.database} draftSeason={selectedDraftSeason} refreshKey={auditRefreshKey} />
-              ) : (
-                <section className="commissioner-panel">
-                  <p className="eyebrow">Audit Log</p>
-                  <h2>Recent Activity</h2>
-                  <div className="import-message">Log in with View Audit Log permission to review activity.</div>
-                </section>
-              )}
+              <CommissionerTabs tabs={commissionerTabs} activeTabId={selectedCommissionerTab} onSelectTab={setSelectedCommissionerTab} />
             </section>
           ) : selectedPage === "login" ? (
             <LoginPage

@@ -335,6 +335,42 @@ input {
   padding: 14px;
 }
 
+.commissioner-tabs {
+  display: grid;
+  gap: 12px;
+}
+
+.commissioner-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.commissioner-tab-list button {
+  background: #edf3ef;
+  border: 1px solid #d3ded6;
+  border-radius: 6px;
+  color: #243127;
+  cursor: pointer;
+  font-weight: 800;
+  min-height: 40px;
+  padding: 0 12px;
+}
+
+.commissioner-tab-list button:hover {
+  background: #e2ece5;
+}
+
+.commissioner-tab-list button.active {
+  background: #172018;
+  border-color: #172018;
+  color: #ffffff;
+}
+
+.commissioner-tab-panel {
+  min-width: 0;
+}
+
 .database-status {
   align-items: center;
   border-radius: 6px;
