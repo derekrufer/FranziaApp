@@ -24,6 +24,7 @@ const pbkdf2 = promisify(crypto.pbkdf2);
 const AUDIT_LOG_EVENT_TYPES = [
   "first_account_created",
   "account_registered",
+  "account_created",
   "keepers_changed",
   "rankings_uploaded",
   "legacy_draft_uploaded",
@@ -420,6 +421,64 @@ function normalizeDisplayNameInput(name) {
 
 export async function getAccounts() {
   return withDb(async (client) => (await getAccountRows(client)).map(publicAccount));
+}
+
+export async function createAccountAdmin(input = {}, actor = {}) {
+  return withDb(async (client) => {
+    const displayName = normalizeDisplayNameInput(input.name ?? input.displayName);
+    const normalizedEmail = normalizeEmailInput(input.email);
+    const passwordValue = validatePasswordInput(input.password);
+    const teamId = UUID_PATTERN.test(String(input.teamId ?? "")) ? input.teamId : null;
+    if (teamId) {
+      const team = await client.query("SELECT id FROM teams WHERE id = $1", [teamId]);
+      if (!team.rows[0]) {
+        throw new Error("Selected team was not found.");
+      }
+    }
+
+    const duplicate = await client.query(
+      `SELECT email, display_name
+       FROM app_users
+       WHERE lower(email) = lower($1) OR lower(display_name) = lower($2)
+       LIMIT 1`,
+      [normalizedEmail, displayName]
+    );
+    if (duplicate.rows[0]?.email?.toLowerCase() === normalizedEmail) {
+      throw new Error("An account already exists for that email.");
+    }
+    if (duplicate.rows[0]) {
+      throw new Error("An account already exists for that name.");
+    }
+
+    const passwordHash = await hashPassword(passwordValue);
+    const inserted = await client.query(
+      `INSERT INTO app_users (email, display_name, password_hash, team_id, is_active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       RETURNING id`,
+      [normalizedEmail, displayName, passwordHash, teamId, input.active === undefined ? true : Boolean(input.active)]
+    );
+    const userId = inserted.rows[0].id;
+    const permissions = Array.from(new Set((input.permissions ?? []).map((permission) => String(permission ?? "").trim()).filter(Boolean)));
+    for (const permission of permissions) {
+      await client.query(
+        `INSERT INTO user_permissions (user_id, permission)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id, permission) DO NOTHING`,
+        [userId, permission]
+      );
+    }
+
+    const draft = await getOrCreateDraft(client, DEFAULT_DRAFT.season);
+    await recordDraftEvent(client, draft.id, "account_created", {
+      userId,
+      email: normalizedEmail,
+      displayName,
+      teamId,
+      permissions
+    }, actor);
+
+    return publicAccount((await getAccountRows(client, "WHERE u.id = $1", [userId]))[0]);
+  });
 }
 
 export async function updateAccountAdmin(accountId, updates = {}) {

@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Database, FileUp, RotateCcw, Search, ShieldChec
 import {
   API_BASE_URL,
   approvePlayerMatch,
+  createAccount,
   editPick,
   fetchAccounts,
   fetchCurrentUser,
@@ -1490,6 +1491,7 @@ function KeeperDeadlinePanel({ database, draft, canManageKeepers, auditActor, on
 
 function auditEventTitle(eventType) {
   const titles = {
+    account_created: "Account created",
     keepers_changed: "Keeper changed",
     rankings_uploaded: "Rankings uploaded",
     legacy_draft_uploaded: "Draft source seeded",
@@ -1510,6 +1512,9 @@ function auditEventDetail(event) {
   const payload = event.payload ?? {};
   if (event.eventType === "keepers_changed") {
     return `${payload.count ?? 0} keeper${payload.count === 1 ? "" : "s"} saved`;
+  }
+  if (event.eventType === "account_created") {
+    return `${payload.displayName ?? "Account"} created`;
   }
   if (event.eventType === "rankings_uploaded") {
     return `${payload.count ?? 0} player rankings`;
@@ -1610,6 +1615,16 @@ function AccountAdminPanel({ database, teams, currentUser }) {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [busyAccountId, setBusyAccountId] = useState("");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [newAccount, setNewAccount] = useState({
+    name: "",
+    email: "",
+    password: "",
+    teamId: "",
+    active: true,
+    permissions: []
+  });
 
   async function loadAccounts() {
     if (!database?.connected) {
@@ -1665,6 +1680,81 @@ function AccountAdminPanel({ database, teams, currentUser }) {
     updateDraft(accountId, { permissions: Array.from(permissions) });
   }
 
+  function updateNewAccount(patch) {
+    setNewAccount((current) => ({
+      ...current,
+      ...patch
+    }));
+  }
+
+  function toggleNewAccountPermission(permission) {
+    setNewAccount((current) => {
+      const permissions = new Set(current.permissions ?? []);
+      if (permissions.has(permission)) {
+        permissions.delete(permission);
+      } else {
+        permissions.add(permission);
+      }
+
+      return {
+        ...current,
+        permissions: Array.from(permissions)
+      };
+    });
+  }
+
+  async function handleCreateAccount() {
+    const name = newAccount.name.trim();
+    const email = newAccount.email.trim();
+    if (!name || !email || !newAccount.password) {
+      setMessage("Name, email, and temporary password are required.");
+      return;
+    }
+    if (newAccount.password.length < 8) {
+      setMessage("Temporary password must be at least 8 characters.");
+      return;
+    }
+
+    setCreatingAccount(true);
+    setMessage("");
+    try {
+      const created = await createAccount({
+        name,
+        email,
+        password: newAccount.password,
+        teamId: newAccount.teamId || null,
+        active: newAccount.active,
+        permissions: newAccount.permissions ?? []
+      });
+      const nextAccounts = await fetchAccounts();
+      setAccounts(nextAccounts);
+      setDraftsById(nextAccounts.reduce((acc, account) => {
+        acc[account.id] = {
+          email: account.email ?? "",
+          displayName: account.displayName ?? "",
+          teamId: account.teamId ?? "",
+          isActive: Boolean(account.isActive),
+          permissions: account.permissions ?? []
+        };
+        return acc;
+      }, {}));
+      setNewAccount({
+        name: "",
+        email: "",
+        password: "",
+        teamId: "",
+        active: true,
+        permissions: []
+      });
+      setShowCreateForm(false);
+      setMessage(`${created.displayName} created.`);
+    } catch (caught) {
+      setMessage(caught.response?.data?.error ?? caught.message);
+    } finally {
+      setCreatingAccount(false);
+    }
+  }
+
   async function handleSave(account) {
     setBusyAccountId(account.id);
     setMessage("");
@@ -1707,13 +1797,74 @@ function AccountAdminPanel({ database, teams, currentUser }) {
           <p className="eyebrow">Accounts</p>
           <h2>Account Admin</h2>
         </div>
-        <button className="secondary-action compact-action" disabled={!database?.connected || loading} onClick={loadAccounts}>
-          {loading ? "Loading..." : "Refresh"}
-        </button>
+        <div className="account-heading-actions">
+          <button className="secondary-action compact-action" disabled={!database?.connected || loading || creatingAccount} onClick={() => setShowCreateForm((current) => !current)}>
+            {showCreateForm ? "Cancel Add" : "Add Account"}
+          </button>
+          <button className="secondary-action compact-action" disabled={!database?.connected || loading} onClick={loadAccounts}>
+            {loading ? "Loading..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {!database?.connected && <div className="import-message">PostgreSQL is required for accounts.</div>}
       {message && <div className="import-message">{message}</div>}
+      {showCreateForm && (
+        <div className="account-create-panel">
+          <div className="account-admin-main">
+            <label>
+              Name
+              <input value={newAccount.name} disabled={creatingAccount} onChange={(event) => updateNewAccount({ name: event.target.value })} />
+            </label>
+            <label>
+              Email
+              <input type="email" value={newAccount.email} disabled={creatingAccount} onChange={(event) => updateNewAccount({ email: event.target.value })} />
+            </label>
+            <label>
+              Temporary Password
+              <input type="password" value={newAccount.password} disabled={creatingAccount} onChange={(event) => updateNewAccount({ password: event.target.value })} />
+            </label>
+            <label>
+              Fantasy Team
+              <select value={newAccount.teamId} disabled={creatingAccount} onChange={(event) => updateNewAccount({ teamId: event.target.value })}>
+                <option value="">No team linked</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>{team.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="account-active-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(newAccount.active)}
+                disabled={creatingAccount}
+                onChange={(event) => updateNewAccount({ active: event.target.checked })}
+              />
+              Active
+            </label>
+          </div>
+
+          <div className="permission-grid">
+            {ACCOUNT_PERMISSIONS.map((permission) => (
+              <label key={permission} className="permission-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(newAccount.permissions?.includes(permission))}
+                  disabled={creatingAccount}
+                  onChange={() => toggleNewAccountPermission(permission)}
+                />
+                {permission.replace(/_/g, " ")}
+              </label>
+            ))}
+          </div>
+
+          <div className="account-create-actions">
+            <button className="primary-action compact-action" disabled={creatingAccount || !database?.connected} onClick={handleCreateAccount}>
+              {creatingAccount ? "Creating..." : "Create Account"}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="account-list">
         {accounts.map((account) => {
           const draft = draftsById[account.id] ?? {};

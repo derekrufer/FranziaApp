@@ -7,6 +7,7 @@ import { getDraftState, makePick, resetDraftedPicks, undoLastPick } from "./draf
 import { getDatabaseStatus } from "./db.js";
 import {
   approvePlayerMatch,
+  createAccountAdmin,
   getPostgresDraftState,
   getAccounts,
   getAuditLog,
@@ -429,6 +430,17 @@ app.get("/api/accounts", asyncRoute(async (_request, response) => {
 
   await requirePermission(_request, "commissioner_admin");
   response.json(await getAccounts());
+}));
+
+app.post("/api/admin/accounts", asyncRoute(async (request, response) => {
+  const database = await getDatabaseStatus();
+  if (!database.connected) {
+    response.status(400).json({ error: "PostgreSQL is required for account administration." });
+    return;
+  }
+
+  const user = await requirePermission(request, "commissioner_admin");
+  response.status(201).json(await createAccountAdmin(request.body, actorForUser(user, true)));
 }));
 
 app.post("/api/admin/accounts/:accountId", asyncRoute(async (request, response) => {

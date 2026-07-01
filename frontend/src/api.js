@@ -30,6 +30,11 @@ export async function fetchAccounts() {
   return response.data;
 }
 
+export async function createAccount(payload) {
+  const response = await axios.post(`${API_BASE_URL}/api/admin/accounts`, payload);
+  return response.data;
+}
+
 export async function updateAccount(accountId, payload) {
   const response = await axios.post(`${API_BASE_URL}/api/admin/accounts/${accountId}`, payload);
   return response.data;
