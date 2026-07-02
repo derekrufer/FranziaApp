@@ -124,8 +124,8 @@ function CommissionerTabs({ tabs, activeTabId, onSelectTab }) {
   );
 }
 
-function mockLobbyTeamIdFor(teamId) {
-  return teamId && teamId !== COMMISSIONER_ID && UUID_PATTERN.test(String(teamId)) ? teamId : null;
+function mockLobbyUserIdFor(userId) {
+  return UUID_PATTERN.test(String(userId ?? "")) ? userId : null;
 }
 
 function userHasPermission(user, permission) {
@@ -2402,6 +2402,7 @@ export default function App() {
   const [selectedDraftSeason, setSelectedDraftSeason] = useState(2026);
   const [error, setError] = useState("");
   const [timerSeconds, setTimerSeconds] = useState(PICK_TIMER_SECONDS);
+  const [pendingPickId, setPendingPickId] = useState("");
   const [pickAnnouncement, setPickAnnouncement] = useState(null);
   const [exportAnnouncement, setExportAnnouncement] = useState(null);
   const [auditRefreshKey, setAuditRefreshKey] = useState(0);
@@ -2452,8 +2453,8 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    const accountMockLobbyTeamId = mockLobbyTeamIdFor(currentUser?.teamId);
-    const mockLobbyTeamId = state?.draft?.status === "mock" ? accountMockLobbyTeamId : null;
+    const accountMockUserId = mockLobbyUserIdFor(currentUser?.id);
+    const mockLobbyTeamId = state?.draft?.status === "mock" ? accountMockUserId : null;
     fetchDraftState(selectedDraftSeason, { mockLobbyTeamId }).then((nextState) => {
       setState(nextState);
     }).catch((caught) => setError(caught.message));
@@ -2472,11 +2473,13 @@ export default function App() {
 
   useEffect(() => {
 
-    const socket = io(API_BASE_URL);
+    const socket = io(API_BASE_URL, {
+      auth: authToken ? { token: authToken } : undefined
+    });
     socket.on("draft:updated", (nextState) => {
       if (!nextState?.draft?.season || Number(nextState.draft.season) === Number(selectedDraftSeasonRef.current)) {
-        const activeLobbyTeamId = mockLobbyTeamIdFor(currentUser?.teamId);
-        if (nextState.draft?.status === "mock" && nextState.draft?.mockLobbyTeamId && nextState.draft.mockLobbyTeamId !== activeLobbyTeamId) {
+        const activeMockUserId = mockLobbyUserIdFor(currentUser?.id);
+        if (nextState.draft?.status === "mock" && nextState.draft?.mockUserId && nextState.draft.mockUserId !== activeMockUserId) {
           return;
         }
         applyDraftState(nextState);
@@ -2484,7 +2487,7 @@ export default function App() {
     });
 
     return () => socket.disconnect();
-  }, [currentUser?.teamId]);
+  }, [authToken, currentUser?.id]);
 
   function findNewDraftedPick(previousState, nextState) {
     if (!previousState?.picks || !nextState?.picks) {
@@ -2545,6 +2548,47 @@ export default function App() {
     }
   }
 
+  function buildOptimisticPickState(currentState, pickId, playerId) {
+    if (!currentState?.picks?.length) {
+      return null;
+    }
+
+    const player = (currentState.availablePlayers ?? []).find((item) => item.id === playerId)
+      ?? (currentState.players ?? []).find((item) => item.id === playerId);
+    if (!player) {
+      return null;
+    }
+
+    let optimisticPick = null;
+    const picks = currentState.picks.map((pick) => {
+      if (pick.id !== pickId || pick.playerId) {
+        return pick;
+      }
+
+      optimisticPick = {
+        ...pick,
+        playerId,
+        player,
+        pickType: "drafted"
+      };
+      return optimisticPick;
+    });
+
+    if (!optimisticPick) {
+      return null;
+    }
+
+    return {
+      ...currentState,
+      picks,
+      currentPick: picks
+        .slice()
+        .sort((a, b) => a.pickNumber - b.pickNumber)
+        .find((pick) => pick.playerId == null) ?? null,
+      availablePlayers: (currentState.availablePlayers ?? []).filter((item) => item.id !== playerId)
+    };
+  }
+
   const picksByRound = useMemo(() => groupPicksByRound(state?.picks ?? []), [state]);
 
   const filteredPlayers = useMemo(() => {
@@ -2584,8 +2628,8 @@ export default function App() {
   const canAdminAccounts = userHasPermission(currentUser, "commissioner_admin");
   const canAccessCommissioner = canManageDraft || canManageKeepers || canManageRankings || canSyncFleaflicker || canViewAuditLog;
   const draftMode = state?.draft?.status === "mock" ? "mock" : "real";
-  const accountMockLobbyTeamId = mockLobbyTeamIdFor(currentUser?.teamId);
-  const mockLobbyTeamId = draftMode === "mock" ? accountMockLobbyTeamId : null;
+  const accountMockUserId = mockLobbyUserIdFor(currentUser?.id);
+  const mockLobbyTeamId = draftMode === "mock" ? accountMockUserId : null;
   const visiblePages = useMemo(
     () => PAGES.filter((page) => {
       if (page.id === "login") {
@@ -2722,7 +2766,7 @@ export default function App() {
   }, [commissionerTabs, selectedCommissionerTab]);
 
   const selectedTeamCanPick = draftMode === "mock"
-    ? Boolean(mockLobbyTeamId && currentUser)
+    ? Boolean(currentUser)
     : canManageDraft || (currentUser?.teamId && currentPick?.currentOwnerTeamId === currentUser.teamId);
   const timerMinutes = Math.floor(timerSeconds / 60);
   const timerRemainder = String(timerSeconds % 60).padStart(2, "0");
@@ -2783,18 +2827,45 @@ export default function App() {
     }
 
     setError("");
+    const previousState = stateRef.current;
+    const optimisticState = buildOptimisticPickState(previousState, currentPick.id, playerId);
+    if (optimisticState) {
+      const optimisticPick = optimisticState.picks.find((pick) => pick.id === currentPick.id);
+      stateRef.current = optimisticState;
+      setState(optimisticState);
+      announcePick(optimisticPick);
+    }
+
+    setPendingPickId(currentPick.id);
     try {
       const nextState = await submitPick({
         pickId: currentPick.id,
         playerId,
         draftSeason: selectedDraftSeason,
         mockLobbyTeamId,
-        teamId: canManageDraft || draftMode === "mock" ? currentPick.currentOwnerTeamId : currentUser?.teamId,
+        teamId: draftMode === "mock" || canManageDraft ? currentPick.currentOwnerTeamId : currentUser?.teamId,
         ...auditActor
       });
       applyDraftState(nextState);
     } catch (caught) {
-      setError(caught.response?.data?.error ?? caught.message);
+      const message = caught.response?.data?.error ?? caught.message;
+      setError(message);
+      if (previousState) {
+        stateRef.current = previousState;
+        setState(previousState);
+      }
+      if (optimisticState && announcedPickRef.current === currentPick.id) {
+        announcedPickRef.current = "";
+        setPickAnnouncement(null);
+      }
+      if (message === "Draft state refreshed; try again." || message === "Pick already taken.") {
+        fetchDraftState(selectedDraftSeason, { mockLobbyTeamId }).then((nextState) => {
+          stateRef.current = nextState;
+          setState(nextState);
+        }).catch(() => {});
+      }
+    } finally {
+      setPendingPickId("");
     }
   }
 
@@ -3043,7 +3114,7 @@ export default function App() {
                         key={player.id}
                         player={player}
                         displayRank={index + 1}
-                        disabled={!selectedTeamCanPick}
+                        disabled={!selectedTeamCanPick || Boolean(pendingPickId)}
                         onPick={handleMakePick}
                       />
                     ))}

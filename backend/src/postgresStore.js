@@ -1065,25 +1065,25 @@ async function placeSelectedKeepers(client, draftId) {
   }
 }
 
-async function ensureMockDraftPicks(client, draftId, lobbyTeamId) {
-  if (!UUID_PATTERN.test(String(lobbyTeamId ?? ""))) {
-    throw new Error("A team lobby is required for Mock Draft mode.");
+async function ensureMockDraftPicks(client, draftId, mockUserId) {
+  if (!UUID_PATTERN.test(String(mockUserId ?? ""))) {
+    throw new Error("A user is required for Mock Draft mode.");
   }
 
-  const team = await client.query("SELECT id FROM teams WHERE id = $1", [lobbyTeamId]);
-  if (!team.rows[0]) {
-    throw new Error("Mock draft lobby team not found.");
+  const user = await client.query("SELECT id FROM app_users WHERE id = $1 AND is_active = true", [mockUserId]);
+  if (!user.rows[0]) {
+    throw new Error("Mock draft user not found.");
   }
 
   await client.query(
-    `INSERT INTO mock_draft_picks (draft_id, lobby_team_id, source_pick_id, player_id, pick_type)
-     SELECT draft_id, $2, id,
+    `INSERT INTO mock_draft_picks (draft_id, mock_user_id, lobby_team_id, source_pick_id, player_id, pick_type)
+     SELECT draft_id, $2, $3, id,
        CASE WHEN pick_type = 'keeper' THEN player_id ELSE NULL END,
        CASE WHEN pick_type = 'keeper' THEN 'keeper' ELSE 'open' END
      FROM draft_picks
      WHERE draft_id = $1
-     ON CONFLICT (draft_id, lobby_team_id, source_pick_id) DO NOTHING`,
-    [draftId, lobbyTeamId]
+     ON CONFLICT (draft_id, mock_user_id, source_pick_id) WHERE mock_user_id IS NOT NULL DO NOTHING`,
+    [draftId, mockUserId, null]
   );
 
   await client.query(
@@ -1097,8 +1097,8 @@ async function ensureMockDraftPicks(client, draftId, lobbyTeamId) {
      FROM draft_picks dp
      WHERE mdp.source_pick_id = dp.id
        AND mdp.draft_id = $1
-       AND mdp.lobby_team_id = $2`,
-    [draftId, lobbyTeamId]
+       AND mdp.mock_user_id = $2`,
+    [draftId, mockUserId]
   );
 }
 
@@ -1903,14 +1903,15 @@ export async function updateDraftOrder(teamIds, draftSeason = DEFAULT_DRAFT.seas
   });
 }
 
-export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, mockLobbyTeamId = null } = {}) {
+export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, mockUserId = null, mockLobbyTeamId = null } = {}) {
   return withDb(async (client) => {
     const draft = await getOrCreateDraft(client, season);
     await ensureDraftPicks(client, draft);
     const draftMode = draft.status === "mock" ? "mock" : "real";
-    const useMockLobby = draftMode === "mock" && mockLobbyTeamId;
+    const mockBoardUserId = mockUserId ?? mockLobbyTeamId;
+    const useMockLobby = draftMode === "mock" && mockBoardUserId;
     if (useMockLobby) {
-      await ensureMockDraftPicks(client, draft.id, mockLobbyTeamId);
+      await ensureMockDraftPicks(client, draft.id, mockBoardUserId);
     }
 
     const pickQuery = useMockLobby
@@ -1926,9 +1927,9 @@ export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, moc
          JOIN draft_picks dp ON dp.id = mdp.source_pick_id
          JOIN teams t ON t.id = dp.current_owner_team_id
          LEFT JOIN players p ON p.id = mdp.player_id
-         WHERE mdp.draft_id = $1 AND mdp.lobby_team_id = $2
+         WHERE mdp.draft_id = $1 AND mdp.mock_user_id = $2
          ORDER BY dp.pick_number`,
-        [draft.id, mockLobbyTeamId]
+        [draft.id, mockBoardUserId]
       )
       : client.query(
         `SELECT dp.*,
@@ -2029,7 +2030,8 @@ export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, moc
         season: draft.season,
         roundCount: draft.round_count,
         status: draft.status,
-        mockLobbyTeamId: useMockLobby ? mockLobbyTeamId : null,
+        mockLobbyTeamId: useMockLobby ? mockBoardUserId : null,
+        mockUserId: useMockLobby ? mockBoardUserId : null,
         keeperLockDeadline: draft.keeper_lock_deadline,
         keeperLocked: draft.keeper_lock_deadline ? new Date(draft.keeper_lock_deadline).getTime() <= Date.now() : false
       },
@@ -2045,38 +2047,38 @@ export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, moc
   });
 }
 
-export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, mockLobbyTeamId = null, draftSeason = DEFAULT_DRAFT.season }) {
+export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, mockUserId = null, mockLobbyTeamId = null, draftSeason = DEFAULT_DRAFT.season }) {
   let resultDraftSeason = DEFAULT_DRAFT.season;
+  const mockBoardUserId = mockUserId ?? mockLobbyTeamId;
   await withDb(async (client) => {
     const requestedDraft = await getOrCreateDraft(client, draftSeason);
     const requestedDraftMode = requestedDraft.status === "mock" ? "mock" : "real";
     if (requestedDraftMode === "mock") {
       await ensureDraftPicks(client, requestedDraft);
-      await ensureMockDraftPicks(client, requestedDraft.id, mockLobbyTeamId);
+      await ensureMockDraftPicks(client, requestedDraft.id, mockBoardUserId);
       const pick = await client.query(
         `SELECT mdp.*, dp.pick_number, dp.round, dp.current_owner_team_id
          FROM mock_draft_picks mdp
          JOIN draft_picks dp ON dp.id = mdp.source_pick_id
-         WHERE mdp.draft_id = $1 AND mdp.lobby_team_id = $2 AND mdp.id = $3
+         WHERE mdp.draft_id = $1 AND mdp.mock_user_id = $2 AND mdp.id = $3
          FOR UPDATE OF mdp`,
-        [requestedDraft.id, mockLobbyTeamId, pickId]
+        [requestedDraft.id, mockBoardUserId, pickId]
       );
       const currentPick = pick.rows[0];
       if (!currentPick) {
-        throw new Error("Mock pick not found.");
+        throw new Error("Draft state refreshed; try again.");
       }
       if (currentPick.player_id) {
-        throw new Error("This pick has already been used.");
+        throw new Error("Pick already taken.");
       }
-
       const player = await client.query("SELECT id FROM players WHERE id = $1", [playerId]);
       if (!player.rows[0]) {
         throw new Error("Player not found.");
       }
 
       const alreadyUsed = await client.query(
-        "SELECT id FROM mock_draft_picks WHERE draft_id = $1 AND lobby_team_id = $2 AND player_id = $3 LIMIT 1",
-        [requestedDraft.id, mockLobbyTeamId, playerId]
+        "SELECT id FROM mock_draft_picks WHERE draft_id = $1 AND mock_user_id = $2 AND player_id = $3 LIMIT 1",
+        [requestedDraft.id, mockBoardUserId, playerId]
       );
       if (alreadyUsed.rows[0]) {
         throw new Error("That player is already drafted or kept in this mock lobby.");
@@ -2088,7 +2090,7 @@ export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, m
         playerId,
         teamId,
         draftMode: "mock",
-        mockLobbyTeamId
+        mockUserId: mockBoardUserId
       }, actor);
       resultDraftSeason = requestedDraft.season;
       return;
@@ -2108,12 +2110,13 @@ export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, m
     }
     resultDraftSeason = currentPick.draft_season;
     if (currentPick.player_id) {
-      throw new Error("This pick has already been used.");
+      throw new Error("Pick already taken.");
     }
     const draftMode = currentPick.draft_status === "mock" ? "mock" : "real";
-    const canOverrideOwner = draftMode === "mock" || isCommissionerActor(actor);
-    if (!canOverrideOwner && currentPick.current_owner_team_id !== teamId) {
-      throw new Error("Only the team on the clock can make this pick.");
+    const canOverrideOwner = isCommissionerActor(actor);
+    const effectiveTeamId = canOverrideOwner ? teamId : actor.actorTeamId;
+    if (!canOverrideOwner && currentPick.current_owner_team_id !== effectiveTeamId) {
+      throw new Error("You can only draft for your own team.");
     }
 
     const alreadyUsed = await client.query(
@@ -2125,26 +2128,26 @@ export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, m
     }
 
     await client.query("UPDATE draft_picks SET player_id = $1, pick_type = 'drafted' WHERE id = $2", [playerId, pickId]);
-    await recordDraftEvent(client, currentPick.draft_id, "pick_made", { pickId, playerId, teamId, draftMode }, actor);
+    await recordDraftEvent(client, currentPick.draft_id, "pick_made", { pickId, playerId, teamId: effectiveTeamId, draftMode }, actor);
   });
-  return getPostgresDraftState({ season: resultDraftSeason, mockLobbyTeamId });
+  return getPostgresDraftState({ season: resultDraftSeason, mockUserId: mockBoardUserId });
 }
 
-export async function undoPostgresPick(draftSeason = DEFAULT_DRAFT.season, mockLobbyTeamId = null, actor = {}) {
+export async function undoPostgresPick(draftSeason = DEFAULT_DRAFT.season, mockUserId = null, actor = {}) {
   await withDb(async (client) => {
     const draft = await getOrCreateDraft(client, draftSeason);
     const draftMode = draft.status === "mock" ? "mock" : "real";
     if (draftMode === "mock") {
       await ensureDraftPicks(client, draft);
-      await ensureMockDraftPicks(client, draft.id, mockLobbyTeamId);
+      await ensureMockDraftPicks(client, draft.id, mockUserId);
       const result = await client.query(
         `SELECT mdp.id, dp.pick_number
          FROM mock_draft_picks mdp
          JOIN draft_picks dp ON dp.id = mdp.source_pick_id
-         WHERE mdp.draft_id = $1 AND mdp.lobby_team_id = $2 AND mdp.pick_type = 'drafted' AND mdp.player_id IS NOT NULL
+         WHERE mdp.draft_id = $1 AND mdp.mock_user_id = $2 AND mdp.pick_type = 'drafted' AND mdp.player_id IS NOT NULL
          ORDER BY dp.pick_number DESC
          LIMIT 1`,
-        [draft.id, mockLobbyTeamId]
+        [draft.id, mockUserId]
       );
       const pick = result.rows[0];
       if (!pick) {
@@ -2156,7 +2159,7 @@ export async function undoPostgresPick(draftSeason = DEFAULT_DRAFT.season, mockL
         pickId: pick.id,
         pickNumber: pick.pick_number,
         draftMode,
-        mockLobbyTeamId
+        mockUserId
       }, actor);
       return;
     }
@@ -2176,7 +2179,7 @@ export async function undoPostgresPick(draftSeason = DEFAULT_DRAFT.season, mockL
     await client.query("UPDATE draft_picks SET player_id = NULL, pick_type = 'open' WHERE id = $1", [pick.id]);
     await recordDraftEvent(client, draft.id, "pick_undone", { pickId: pick.id, draftMode }, actor);
   });
-  return getPostgresDraftState({ season: draftSeason, mockLobbyTeamId });
+  return getPostgresDraftState({ season: draftSeason, mockUserId });
 }
 
 export async function editPostgresPick({ draftSeason = DEFAULT_DRAFT.season, pickId, playerId = null, actor = {} }) {
@@ -2237,25 +2240,25 @@ export async function editPostgresPick({ draftSeason = DEFAULT_DRAFT.season, pic
   return getPostgresDraftState({ season: draftSeason });
 }
 
-export async function resetPostgresDraftedPicks(draftSeason = DEFAULT_DRAFT.season, actor = {}, mockLobbyTeamId = null) {
+export async function resetPostgresDraftedPicks(draftSeason = DEFAULT_DRAFT.season, actor = {}, mockUserId = null) {
   await withDb(async (client) => {
     const draft = await getOrCreateDraft(client, draftSeason);
     const draftMode = draft.status === "mock" ? "mock" : "real";
     if (draftMode === "mock") {
       await ensureDraftPicks(client, draft);
-      await ensureMockDraftPicks(client, draft.id, mockLobbyTeamId);
+      await ensureMockDraftPicks(client, draft.id, mockUserId);
       const result = await client.query(
         `UPDATE mock_draft_picks
          SET player_id = NULL, pick_type = 'open'
-         WHERE draft_id = $1 AND lobby_team_id = $2 AND pick_type = 'drafted'
+         WHERE draft_id = $1 AND mock_user_id = $2 AND pick_type = 'drafted'
          RETURNING id`,
-        [draft.id, mockLobbyTeamId]
+        [draft.id, mockUserId]
       );
-      await ensureMockDraftPicks(client, draft.id, mockLobbyTeamId);
+      await ensureMockDraftPicks(client, draft.id, mockUserId);
       await recordDraftEvent(client, draft.id, "draft_reset", {
         clearedPickCount: result.rowCount,
         draftMode,
-        mockLobbyTeamId
+        mockUserId
       }, actor);
       return;
     }
@@ -2278,7 +2281,7 @@ export async function resetPostgresDraftedPicks(draftSeason = DEFAULT_DRAFT.seas
       draftMode
     }, actor);
   });
-  return getPostgresDraftState({ season: draftSeason, mockLobbyTeamId });
+  return getPostgresDraftState({ season: draftSeason, mockUserId });
 }
 
 export async function markDraftAsSourceForNextYear(draftSeason = DEFAULT_DRAFT.season, actor = {}) {

@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS draft_picks (
 CREATE TABLE IF NOT EXISTS mock_draft_picks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draft_id UUID NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
-  lobby_team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  lobby_team_id UUID REFERENCES teams(id) ON DELETE CASCADE,
+  mock_user_id UUID REFERENCES app_users(id) ON DELETE CASCADE,
   source_pick_id UUID NOT NULL REFERENCES draft_picks(id) ON DELETE CASCADE,
   player_id UUID REFERENCES players(id),
   pick_type TEXT NOT NULL DEFAULT 'open',
@@ -157,6 +158,8 @@ CREATE TABLE IF NOT EXISTS player_match_decisions (
 );
 
 ALTER TABLE player_match_decisions ADD COLUMN IF NOT EXISTS actor_user_id UUID REFERENCES app_users(id) ON DELETE SET NULL;
+ALTER TABLE mock_draft_picks ADD COLUMN IF NOT EXISTS mock_user_id UUID REFERENCES app_users(id) ON DELETE CASCADE;
+ALTER TABLE mock_draft_picks ALTER COLUMN lobby_team_id DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_app_users_team ON app_users (team_id);
 CREATE INDEX IF NOT EXISTS idx_user_permissions_permission ON user_permissions (permission);
@@ -164,6 +167,8 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions (expires_at);
 CREATE INDEX IF NOT EXISTS idx_draft_picks_draft_round ON draft_picks (draft_id, round);
 CREATE INDEX IF NOT EXISTS idx_mock_draft_picks_lobby ON mock_draft_picks (draft_id, lobby_team_id);
+CREATE INDEX IF NOT EXISTS idx_mock_draft_picks_user ON mock_draft_picks (draft_id, mock_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mock_draft_picks_user_source ON mock_draft_picks (draft_id, mock_user_id, source_pick_id) WHERE mock_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_players_position_rank ON players (position, rank);
 CREATE INDEX IF NOT EXISTS idx_draft_events_draft_created ON draft_events (draft_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fleaflicker_sync_runs_draft_type ON fleaflicker_sync_runs (draft_id, sync_type, finished_at DESC);

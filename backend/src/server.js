@@ -107,6 +107,15 @@ async function requireLoggedIn(request) {
   return user;
 }
 
+async function getOptionalUser(request) {
+  const database = await getDatabaseStatus();
+  if (!database.connected) {
+    return null;
+  }
+
+  return getCurrentUser(getBearerToken(request));
+}
+
 async function requirePermission(request, permission) {
   const user = await requireLoggedIn(request);
   if (!hasPermission(user, permission)) {
@@ -142,7 +151,7 @@ async function runTrackedFleaflickerSync({ syncType, draftSeason, actor, operati
   }
 }
 
-async function getActiveDraftState(season = 2026, mockLobbyTeamId = null) {
+async function getActiveDraftState(season = 2026, mockUserId = null) {
   const database = await getDatabaseStatus();
   if (!database.connected) {
     return {
@@ -152,7 +161,7 @@ async function getActiveDraftState(season = 2026, mockLobbyTeamId = null) {
     };
   }
 
-  return getPostgresDraftState({ season, mockLobbyTeamId });
+  return getPostgresDraftState({ season, mockUserId });
 }
 
 async function emitDraftState(season = 2026) {
@@ -418,7 +427,8 @@ app.get("/api/storage-status", asyncRoute(async (_request, response) => {
 }));
 
 app.get("/api/draft-state", asyncRoute(async (request, response) => {
-  response.json(await getActiveDraftState(getDraftSeason(request.query?.season), request.query?.mockLobbyTeamId ?? null));
+  const user = await getOptionalUser(request);
+  response.json(await getActiveDraftState(getDraftSeason(request.query?.season), user?.id ?? null));
 }));
 
 app.get("/api/accounts", asyncRoute(async (_request, response) => {
@@ -912,36 +922,29 @@ app.post("/api/keepers/:teamId", asyncRoute(async (request, response) => {
 app.post("/api/picks", asyncRoute(async (request, response) => {
   const database = await getDatabaseStatus();
   let state;
+  let mockUpdateUserId = null;
   if (database.connected) {
     const user = await requireLoggedIn(request);
     const canManageDraft = hasPermission(user, "manage_draft");
     const draftSeason = getDraftSeason(request.body?.draftSeason);
-    const mockLobbyTeamId = request.body?.mockLobbyTeamId ?? null;
-    const currentState = await getActiveDraftState(draftSeason, mockLobbyTeamId);
-    const isMockDraft = currentState.draft?.status === "mock";
-
-    if (isMockDraft) {
-      if (!mockLobbyTeamId) {
-        throw requestError(400, "Select a mock draft lobby before making a mock pick.");
-      }
-      if (!canManageDraft && user.teamId !== mockLobbyTeamId) {
-        throw requestError(403, "You can only make picks in your own mock lobby.");
-      }
-    } else if (!canManageDraft && user.teamId !== request.body?.teamId) {
-      throw requestError(403, "You can only make real draft picks for your own team.");
-    }
+    const mockUserId = user.id;
 
     state = await makePostgresPick({
       ...request.body,
       draftSeason,
-      mockLobbyTeamId,
-      teamId: canManageDraft ? request.body?.teamId : user.teamId,
+      mockUserId,
+      teamId: request.body?.teamId,
       actor: actorForUser(user, canManageDraft)
     });
+    if (state.draft?.status === "mock") {
+      mockUpdateUserId = user.id;
+    }
   } else {
     state = makePick(request.body);
   }
-  if (state.draft?.status !== "mock" || !state.draft?.mockLobbyTeamId) {
+  if (state.draft?.status === "mock" && mockUpdateUserId) {
+    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+  } else {
     io.emit("draft:updated", state);
   }
   response.status(201).json(state);
@@ -951,27 +954,25 @@ app.post("/api/picks/undo", asyncRoute(async (request, response) => {
   const database = await getDatabaseStatus();
   const draftSeason = getDraftSeason(request.body?.draftSeason);
   let state;
+  let mockUpdateUserId = null;
   if (database.connected) {
     const user = await requireLoggedIn(request);
     const canManageDraft = hasPermission(user, "manage_draft");
-    const mockLobbyTeamId = request.body?.mockLobbyTeamId ?? null;
-    const currentState = await getActiveDraftState(draftSeason, mockLobbyTeamId);
+    const mockUserId = user.id;
+    const currentState = await getActiveDraftState(draftSeason, mockUserId);
     const isMockDraft = currentState.draft?.status === "mock";
     if (isMockDraft) {
-      if (!mockLobbyTeamId) {
-        throw requestError(400, "Select a mock draft lobby before undoing a mock pick.");
-      }
-      if (!canManageDraft && user.teamId !== mockLobbyTeamId) {
-        throw requestError(403, "You can only undo picks in your own mock lobby.");
-      }
+      mockUpdateUserId = user.id;
     } else if (!canManageDraft) {
       throw requestError(403, "Only draft managers can undo a real draft pick.");
     }
-    state = await undoPostgresPick(draftSeason, mockLobbyTeamId, actorForUser(user, canManageDraft));
+    state = await undoPostgresPick(draftSeason, isMockDraft ? mockUserId : null, actorForUser(user, canManageDraft));
   } else {
     state = undoLastPick();
   }
-  if (state.draft?.status !== "mock" || !state.draft?.mockLobbyTeamId) {
+  if (state.draft?.status === "mock" && mockUpdateUserId) {
+    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+  } else {
     io.emit("draft:updated", state);
   }
   response.json(state);
@@ -981,34 +982,37 @@ app.post("/api/draft/reset", asyncRoute(async (request, response) => {
   const database = await getDatabaseStatus();
   const draftSeason = getDraftSeason(request.body?.draftSeason);
   let state;
+  let mockUpdateUserId = null;
   if (database.connected) {
     const user = await requireLoggedIn(request);
     const canManageDraft = hasPermission(user, "manage_draft");
-    const mockLobbyTeamId = request.body?.mockLobbyTeamId ?? null;
-    const currentState = await getActiveDraftState(draftSeason, mockLobbyTeamId);
+    const mockUserId = user.id;
+    const currentState = await getActiveDraftState(draftSeason, mockUserId);
     const isMockDraft = currentState.draft?.status === "mock";
     if (isMockDraft) {
-      if (!mockLobbyTeamId) {
-        throw requestError(400, "Select a mock draft lobby before resetting a mock draft.");
-      }
-      if (!canManageDraft && user.teamId !== mockLobbyTeamId) {
-        throw requestError(403, "You can only reset your own mock lobby.");
-      }
+      mockUpdateUserId = user.id;
     } else if (!canManageDraft) {
       throw requestError(403, "Only draft managers can reset a real draft.");
     }
-    state = await resetPostgresDraftedPicks(draftSeason, actorForUser(user, canManageDraft), mockLobbyTeamId);
+    state = await resetPostgresDraftedPicks(draftSeason, actorForUser(user, canManageDraft), isMockDraft ? mockUserId : null);
   } else {
     state = resetDraftedPicks();
   }
-  if (state.draft?.status !== "mock" || !state.draft?.mockLobbyTeamId) {
+  if (state.draft?.status === "mock" && mockUpdateUserId) {
+    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+  } else {
     io.emit("draft:updated", state);
   }
   response.json(state);
 }));
 
 io.on("connection", async (socket) => {
-  socket.emit("draft:updated", await getActiveDraftState());
+  const token = socket.handshake.auth?.token ?? null;
+  const user = token ? await getCurrentUser(token) : null;
+  if (user?.id) {
+    socket.join(`user:${user.id}`);
+  }
+  socket.emit("draft:updated", await getActiveDraftState(2026, user?.id ?? null));
 });
 
 server.listen(port, () => {
