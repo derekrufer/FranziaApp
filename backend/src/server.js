@@ -5,8 +5,13 @@ import http from "node:http";
 import { Server } from "socket.io";
 import { getDraftState, makePick, resetDraftedPicks, undoLastPick } from "./draftStore.js";
 import { getDatabaseStatus } from "./db.js";
+import { actorForUser, hasPermission } from "./permissions.js";
 import {
   approvePlayerMatch,
+  autoPickSimulatorNext,
+  autoPickSimulatorRound,
+  autoPickSimulatorUntilUser,
+  autocompleteSimulatorDraft,
   createAccountAdmin,
   getPostgresDraftState,
   getAccounts,
@@ -14,6 +19,7 @@ import {
   getCurrentUser,
   getFleaflickerSyncStatus,
   getPlayerMatchingReview,
+  getSimulatorSettings,
   importFleaflickerEndOfSeasonRosters,
   importFleaflickerTradedPicks,
   importLastYearDraft,
@@ -31,6 +37,7 @@ import {
   registerAccount,
   recordFleaflickerSyncRun,
   rejectPlayerMatch,
+  resetSimulatorDraft,
   resetPostgresDraftedPicks,
   resetAccountPasswordAdmin,
   rebuildSelectedKeeperPicks,
@@ -41,22 +48,29 @@ import {
   updateDraftOrder,
   updateDraftMode,
   updateKeeperLockDeadline,
+  updateSimulatorSettings,
+  userCanMakeMockPick,
   updateSelectedKeepers
 } from "./postgresStore.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const clientOrigin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+const localClientOrigins = Array.from(new Set([
+  clientOrigin,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173"
+]));
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: clientOrigin,
+    origin: localClientOrigins,
     methods: ["GET", "POST"]
   }
 });
 
-app.use(cors({ origin: clientOrigin }));
+app.use(cors({ origin: localClientOrigins }));
 app.use(express.json({ limit: "5mb" }));
 
 function getDraftSeason(value, fallback = 2026) {
@@ -79,19 +93,6 @@ function getBearerToken(request) {
   const header = request.get("authorization") ?? "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match?.[1] ?? null;
-}
-
-function hasPermission(user, permission) {
-  return Boolean(user?.permissions?.includes("commissioner_admin") || user?.permissions?.includes(permission));
-}
-
-function actorForUser(user, elevated = false) {
-  return {
-    actorUserId: user?.id ?? null,
-    actorTeamId: user?.teamId ?? null,
-    actorLabel: user?.displayName ?? "Unknown",
-    isCommissioner: Boolean(elevated || user?.permissions?.includes("commissioner_admin"))
-  };
 }
 
 async function requireLoggedIn(request) {
@@ -168,6 +169,10 @@ async function emitDraftState(season = 2026) {
   const state = await getActiveDraftState(season);
   io.emit("draft:updated", state);
   return state;
+}
+
+function emitUserDraftState(userId, state) {
+  io.to(`user:${userId}`).emit("draft:updated", state);
 }
 
 function asyncRoute(handler) {
@@ -919,6 +924,48 @@ app.post("/api/keepers/:teamId", asyncRoute(async (request, response) => {
   response.json({ ...result, state });
 }));
 
+app.get("/api/simulator/settings", asyncRoute(async (request, response) => {
+  const user = await requireLoggedIn(request);
+  response.json(await getSimulatorSettings(getDraftSeason(request.query?.season), user));
+}));
+
+app.put("/api/simulator/settings", asyncRoute(async (request, response) => {
+  const user = await requireLoggedIn(request);
+  response.json(await updateSimulatorSettings(getDraftSeason(request.body?.draftSeason), user, request.body));
+}));
+
+async function runSimulatorEndpoint(request, response, operation) {
+  const user = await requireLoggedIn(request);
+  const draftSeason = getDraftSeason(request.body?.draftSeason);
+  const result = await operation({
+    draftSeason,
+    user,
+    actor: actorForUser(user, hasPermission(user, "manage_draft"))
+  });
+  emitUserDraftState(user.id, result.state);
+  response.json(result);
+}
+
+app.post("/api/simulator/autopick-next", asyncRoute((request, response) =>
+  runSimulatorEndpoint(request, response, autoPickSimulatorNext)
+));
+
+app.post("/api/simulator/autopick-until-user", asyncRoute((request, response) =>
+  runSimulatorEndpoint(request, response, autoPickSimulatorUntilUser)
+));
+
+app.post("/api/simulator/autopick-round", asyncRoute((request, response) =>
+  runSimulatorEndpoint(request, response, autoPickSimulatorRound)
+));
+
+app.post("/api/simulator/autocomplete", asyncRoute((request, response) =>
+  runSimulatorEndpoint(request, response, autocompleteSimulatorDraft)
+));
+
+app.post("/api/simulator/reset", asyncRoute((request, response) =>
+  runSimulatorEndpoint(request, response, resetSimulatorDraft)
+));
+
 app.post("/api/picks", asyncRoute(async (request, response) => {
   const database = await getDatabaseStatus();
   let state;
@@ -928,6 +975,10 @@ app.post("/api/picks", asyncRoute(async (request, response) => {
     const canManageDraft = hasPermission(user, "manage_draft");
     const draftSeason = getDraftSeason(request.body?.draftSeason);
     const mockUserId = user.id;
+    const currentState = await getActiveDraftState(draftSeason, mockUserId);
+    if (currentState.draft?.status === "mock" && !(await userCanMakeMockPick(draftSeason, user, request.body?.pickId, canManageDraft))) {
+      throw requestError(403, "You can only draft for teams controlled in your private simulator.");
+    }
 
     state = await makePostgresPick({
       ...request.body,
@@ -943,7 +994,7 @@ app.post("/api/picks", asyncRoute(async (request, response) => {
     state = makePick(request.body);
   }
   if (state.draft?.status === "mock" && mockUpdateUserId) {
-    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+    emitUserDraftState(mockUpdateUserId, state);
   } else {
     io.emit("draft:updated", state);
   }
@@ -971,7 +1022,7 @@ app.post("/api/picks/undo", asyncRoute(async (request, response) => {
     state = undoLastPick();
   }
   if (state.draft?.status === "mock" && mockUpdateUserId) {
-    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+    emitUserDraftState(mockUpdateUserId, state);
   } else {
     io.emit("draft:updated", state);
   }
@@ -999,7 +1050,7 @@ app.post("/api/draft/reset", asyncRoute(async (request, response) => {
     state = resetDraftedPicks();
   }
   if (state.draft?.status === "mock" && mockUpdateUserId) {
-    io.to(`user:${mockUpdateUserId}`).emit("draft:updated", state);
+    emitUserDraftState(mockUpdateUserId, state);
   } else {
     io.emit("draft:updated", state);
   }

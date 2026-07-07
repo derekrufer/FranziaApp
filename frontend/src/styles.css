@@ -39,6 +39,7 @@ button {
 
 .topbar,
 .status-band,
+.draft-action-bar,
 .commissioner-panel,
 .page-section,
 .workspace {
@@ -179,18 +180,6 @@ input {
   padding: 0 10px;
 }
 
-.icon-button {
-  align-items: center;
-  background: #172018;
-  border: 0;
-  border-radius: 6px;
-  color: #fff;
-  display: inline-flex;
-  height: 38px;
-  justify-content: center;
-  width: 38px;
-}
-
 .error-banner {
   background: #ffe8df;
   border: 1px solid #f3a381;
@@ -212,11 +201,92 @@ input {
   padding: 14px;
 }
 
+.simulator-panel {
+  background: #ffffff;
+  border: 1px solid #dfe8e1;
+  border-radius: 8px;
+  margin: 0 auto 16px;
+  padding: 14px;
+  width: min(1800px, 100%);
+}
+
+.simulator-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 0.8fr) repeat(2, minmax(160px, 1fr));
+  margin-top: 12px;
+}
+
+.toggle-row,
+.team-toggle {
+  align-items: center;
+  color: #172018;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.toggle-row input,
+.team-toggle input {
+  min-height: 16px;
+  width: 16px;
+}
+
+.controlled-teams {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.controlled-team-grid {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.team-strategies {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.team-strategy-grid {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.team-strategy-row {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.team-strategy-row span {
+  color: #172018;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.simulator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .status-band div {
   border-left: 3px solid #4d7c59;
   display: grid;
   gap: 4px;
   padding-left: 10px;
+}
+
+.draft-action-bar {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
 }
 
 .label {
@@ -1056,8 +1126,8 @@ input {
 .keeper-row {
   display: grid;
   gap: 12px;
-  grid-template-columns: 48px minmax(150px, 1.2fr) minmax(118px, 0.7fr) 54px 64px 96px minmax(230px, 1.25fr) 92px 74px 88px 92px;
-  min-width: 1340px;
+  grid-template-columns: 48px minmax(150px, 1.2fr) minmax(118px, 0.7fr) 54px 64px 96px minmax(230px, 1.25fr) 92px;
+  min-width: 980px;
 }
 
 .keeper-list-header span:nth-child(7),
@@ -1073,23 +1143,6 @@ input {
   font-weight: 800;
   padding: 10px 12px;
   text-transform: uppercase;
-}
-
-.keeper-sort-button {
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  min-height: 0;
-  padding: 0;
-  text-transform: uppercase;
-}
-
-.keeper-sort-button:hover,
-.keeper-sort-button.active {
-  color: #dfe8e1;
-  text-decoration: underline;
 }
 
 .keeper-row {
@@ -1108,25 +1161,6 @@ input {
 .keeper-check input {
   min-height: 18px;
   width: 18px;
-}
-
-.keeper-value {
-  color: #526052;
-  font-weight: 900;
-}
-
-.keeper-value.positive {
-  color: #2f6d45;
-}
-
-.keeper-value.negative {
-  color: #8a4b3a;
-}
-
-.keeper-rating {
-  color: #435043;
-  font-weight: 800;
-  white-space: nowrap;
 }
 
 .keeper-row.position-qb {
@@ -1550,6 +1584,15 @@ small {
 
   .status-band {
     grid-template-columns: 1fr;
+  }
+
+  .simulator-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .simulator-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .import-grid {

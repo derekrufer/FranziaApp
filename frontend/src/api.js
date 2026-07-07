@@ -119,6 +119,21 @@ export async function saveDraftMode(draftSeason, mode, actor = {}) {
   return response.data;
 }
 
+export async function fetchSimulatorSettings(draftSeason = 2026) {
+  const response = await axios.get(`${API_BASE_URL}/api/simulator/settings`, { params: { season: draftSeason } });
+  return response.data;
+}
+
+export async function saveSimulatorSettings(draftSeason, settings) {
+  const response = await axios.put(`${API_BASE_URL}/api/simulator/settings`, { draftSeason, ...settings });
+  return response.data;
+}
+
+export async function runSimulatorAction(action, draftSeason) {
+  const response = await axios.post(`${API_BASE_URL}/api/simulator/${action}`, { draftSeason });
+  return response.data;
+}
+
 export async function editPick(draftSeason, pickId, playerId, actor = {}) {
   const response = await axios.post(`${API_BASE_URL}/api/admin/picks/edit`, { draftSeason, pickId, playerId, ...actor });
   return response.data;

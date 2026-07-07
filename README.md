@@ -1,6 +1,6 @@
 # Franzia Keeper Draft App
 
-A starter web app for a 12-team fantasy football keeper draft.
+A web app for running the Franzia 12-team fantasy football keeper draft, including keeper setup, mock drafts, commissioner tools, Fleaflicker sync, and a PostgreSQL-backed production mode.
 
 ## What Is Included
 
@@ -11,8 +11,12 @@ A starter web app for a 12-team fantasy football keeper draft.
 - Seeded 12-team league data
 - Draft board with keeper slots
 - Available player search and position filters
-- Commissioner undo endpoint
-- PostgreSQL schema for the full persistent version
+- Account registration, login, sessions, and granular permissions
+- Commissioner tools for setup, imports, account management, draft controls, exports, and audit history
+- PostgreSQL persistence for teams, users, sessions, players, drafts, keepers, picks, audit events, sync runs, and player matching decisions
+- Fleaflicker roster and traded-pick sync
+- Per-user mock draft boards
+- Private per-user mock draft simulator with controlled teams, strategy, randomness, and auto-pick controls
 - Docker Compose for local or NAS deployment
 
 ## League Rules In The Scaffold
@@ -25,6 +29,50 @@ A starter web app for a 12-team fantasy football keeper draft.
 - Undrafted end-of-season roster players cost Round 10
 - Keeper rights belong to the team with the player at season end
 - No keeper limit
+
+## Storage, Accounts, And Permissions
+
+The backend supports two storage modes:
+
+- `memory`: used when `DATABASE_URL` is not configured or PostgreSQL is unavailable. This keeps the draft room usable with seeded demo data, but account login, imports, keeper saves, Fleaflicker sync, audit history, and most commissioner tools are disabled.
+- `postgres`: used when `DATABASE_URL` connects successfully. The backend applies `database/schema.sql`, stores all draft data persistently, enables accounts and permissions, and unlocks the full commissioner workflow.
+
+Accounts are stored in PostgreSQL. Users can self-register, and the first self-registered account receives commissioner permissions if no seeded accounts exist yet. The app also seeds known league accounts when teams are present, including Dom as commissioner and Derek/Mitch with the delegated commissioner rights currently used by the app.
+
+Available permissions include:
+
+- `commissioner_admin`
+- `manage_draft`
+- `manage_keepers`
+- `manage_rankings`
+- `sync_fleaflicker`
+- `view_audit_log`
+
+`commissioner_admin` is treated as an override for permission checks. Draft actions in real draft mode require the team on the clock or draft-management rights. Mock draft mode is scoped per logged-in user so each account gets its own private mock board.
+
+In Mock Draft mode, each user can enable a private Draft Simulator. Simulator settings are scoped by draft season and user, default controlled teams to the user’s fantasy team, and let the user choose additional controlled teams, an auto-pick strategy, and randomness. Auto-picked teams use imported player rankings, roster needs, keepers, traded-pick ownership, strategy boosts, and bounded randomness. Simulator writes only to the user’s private mock board and does not affect the shared Real Draft board.
+
+## Fleaflicker Sync
+
+When PostgreSQL is connected and the user has `sync_fleaflicker`, the Commissioner setup tools can pull data from Fleaflicker:
+
+- End-of-season rosters for keeper rights
+- Traded draft picks for the target draft season
+- A setup sync that combines rosters, traded picks, and seeded prior-year draft results
+
+Sync runs are recorded in `fleaflicker_sync_runs`, and player-name conflicts can be reviewed through the player matching tools. Fleaflicker team and owner mappings currently live in `backend/src/postgresStore.js`.
+
+## Frontend Architecture
+
+The React app is organized by feature under `frontend/src`:
+
+- `App.jsx`: top-level draft-room orchestration, socket connection, page routing, and shared state.
+- `features/auth`: login, registration, password setup, and logout UI.
+- `features/draftBoard`: player pool, draft status band, draft board cells, and mock reset placement.
+- `features/keepers`: keeper selection workflow and keeper value display.
+- `features/commissioner`: imports, Fleaflicker sync panels, player matching, draft controls, account admin, and audit log panels.
+- `features/exports`: CSV/ZIP export helpers and backup download panels.
+- `shared`: app constants, reusable layout components, and small UI/domain helpers.
 
 ## Local Development
 
@@ -209,7 +257,7 @@ If Nginx Proxy Manager is on a different Docker network, either attach it to `fa
 
 ## Commissioner Imports
 
-The Commissioner panel appears above the draft board. Imports are enabled when the backend can connect to PostgreSQL.
+The Commissioner tools are available to logged-in users with the relevant permissions. Imports are enabled when the backend can connect to PostgreSQL and the user can manage rankings.
 
 Recommended import order:
 
@@ -225,11 +273,23 @@ Supported CSV headers:
 - Teams: `name,ownerName,slug`
 - Player pool: `rank,name,position,nflTeam,byeWeek`
 - Last year draft: `round,pickNumber,teamName,playerName,position,nflTeam`
+- Headerless draft round import: one row per round with team columns in league draft order
 - End rosters: `teamName,playerName,position,nflTeam`
 - Selected keepers: `teamName,playerName,round`
 - Traded picks: `round,originalTeam,currentOwner`
 
-If `DATABASE_URL` is not configured or Postgres is not running, the app stays usable with demo memory data but upload buttons are disabled.
+If `DATABASE_URL` is not configured or Postgres is not running, the app stays usable with demo memory data but upload buttons, account tools, and persistent keeper/draft changes are disabled.
+
+## Tests
+
+Focused backend tests use Node's built-in test runner:
+
+```powershell
+cd backend
+npm test
+```
+
+The current tests cover keeper rules, in-memory draft pick mutation, permission helpers, mock draft scoping helpers, and draft simulator scoring behavior.
 
 ## Local Development Notes
 

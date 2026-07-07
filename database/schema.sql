@@ -127,6 +127,20 @@ ALTER TABLE draft_events ADD COLUMN IF NOT EXISTS actor_user_id UUID REFERENCES 
 ALTER TABLE draft_events ADD COLUMN IF NOT EXISTS actor_team_id UUID REFERENCES teams(id);
 ALTER TABLE draft_events ADD COLUMN IF NOT EXISTS actor_label TEXT;
 
+CREATE TABLE IF NOT EXISTS simulator_settings (
+  draft_id UUID NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  controlled_team_ids JSONB NOT NULL DEFAULT '[]',
+  strategy TEXT NOT NULL DEFAULT 'balanced',
+  team_strategies JSONB NOT NULL DEFAULT '{}',
+  randomness TEXT NOT NULL DEFAULT 'medium',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (draft_id, user_id)
+);
+
+ALTER TABLE simulator_settings ADD COLUMN IF NOT EXISTS team_strategies JSONB NOT NULL DEFAULT '{}';
+
 CREATE TABLE IF NOT EXISTS fleaflicker_sync_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draft_id UUID NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
@@ -171,5 +185,6 @@ CREATE INDEX IF NOT EXISTS idx_mock_draft_picks_user ON mock_draft_picks (draft_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mock_draft_picks_user_source ON mock_draft_picks (draft_id, mock_user_id, source_pick_id) WHERE mock_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_players_position_rank ON players (position, rank);
 CREATE INDEX IF NOT EXISTS idx_draft_events_draft_created ON draft_events (draft_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_simulator_settings_user ON simulator_settings (user_id, draft_id);
 CREATE INDEX IF NOT EXISTS idx_fleaflicker_sync_runs_draft_type ON fleaflicker_sync_runs (draft_id, sync_type, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_player_match_decisions_name ON player_match_decisions (normalized_name, decision);

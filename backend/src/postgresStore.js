@@ -1,6 +1,8 @@
 import { getKeeperCost, getKeeperOptimizerFields, validateKeeperSelections } from "./keeperEngine.js";
+import { chooseSimulatorPlayer } from "./simulatorEngine.js";
 import { numberOrNull, parseCsv, parseCsvRows, pick } from "./csv.js";
 import { getDatabaseStatus, withDb } from "./db.js";
+import { getMockBoardUserId } from "./mockDraftScope.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -1908,7 +1910,7 @@ export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, moc
     const draft = await getOrCreateDraft(client, season);
     await ensureDraftPicks(client, draft);
     const draftMode = draft.status === "mock" ? "mock" : "real";
-    const mockBoardUserId = mockUserId ?? mockLobbyTeamId;
+    const mockBoardUserId = getMockBoardUserId({ mockUserId, mockLobbyTeamId });
     const useMockLobby = draftMode === "mock" && mockBoardUserId;
     if (useMockLobby) {
       await ensureMockDraftPicks(client, draft.id, mockBoardUserId);
@@ -2047,9 +2049,339 @@ export async function getPostgresDraftState({ season = DEFAULT_DRAFT.season, moc
   });
 }
 
+const SIMULATOR_STRATEGIES = new Set(["balanced", "best_available", "rb_heavy", "wr_heavy", "zero_rb", "wait_on_qb", "team_needs"]);
+const SIMULATOR_RANDOMNESS = new Set(["low", "medium", "high"]);
+
+function normalizeSimulatorStrategy(value) {
+  return SIMULATOR_STRATEGIES.has(value) ? value : "balanced";
+}
+
+function normalizeSimulatorRandomness(value) {
+  return SIMULATOR_RANDOMNESS.has(value) ? value : "medium";
+}
+
+function normalizeControlledTeamIds(teamIds = [], fallbackTeamId = null) {
+  const ids = Array.isArray(teamIds) ? teamIds : [];
+  const cleanIds = ids.filter((teamId) => UUID_PATTERN.test(String(teamId ?? "")));
+  if (cleanIds.length === 0 && fallbackTeamId) {
+    cleanIds.push(fallbackTeamId);
+  }
+  return Array.from(new Set(cleanIds));
+}
+
+function normalizeTeamStrategies(teamStrategies = {}, validTeamIds = null) {
+  const validTeamSet = validTeamIds ? new Set(validTeamIds) : null;
+  return Object.entries(teamStrategies ?? {}).reduce((acc, [teamId, strategy]) => {
+    if (!UUID_PATTERN.test(String(teamId ?? ""))) {
+      return acc;
+    }
+    if (validTeamSet && !validTeamSet.has(teamId)) {
+      return acc;
+    }
+    const normalizedStrategy = normalizeSimulatorStrategy(strategy);
+    if (normalizedStrategy !== "balanced" || strategy === "balanced") {
+      acc[teamId] = normalizedStrategy;
+    }
+    return acc;
+  }, {});
+}
+
+function simulatorSettingsFromRow(row, fallbackTeamId = null) {
+  if (!row) {
+    return {
+      enabled: false,
+      controlledTeamIds: normalizeControlledTeamIds([], fallbackTeamId),
+      strategy: "balanced",
+      teamStrategies: {},
+      randomness: "medium",
+      lastAutoPickReason: ""
+    };
+  }
+
+  return {
+    enabled: Boolean(row.enabled),
+    controlledTeamIds: normalizeControlledTeamIds(row.controlled_team_ids, fallbackTeamId),
+    strategy: normalizeSimulatorStrategy(row.strategy),
+    teamStrategies: normalizeTeamStrategies(row.team_strategies),
+    randomness: normalizeSimulatorRandomness(row.randomness),
+    lastAutoPickReason: row.last_auto_pick_reason ?? ""
+  };
+}
+
+async function ensureSimulatorSettings(client, draftId, userId, fallbackTeamId = null) {
+  const existing = await client.query(
+    "SELECT * FROM simulator_settings WHERE draft_id = $1 AND user_id = $2",
+    [draftId, userId]
+  );
+  if (existing.rows[0]) {
+    return simulatorSettingsFromRow(existing.rows[0], fallbackTeamId);
+  }
+
+  const controlledTeamIds = normalizeControlledTeamIds([], fallbackTeamId);
+  const inserted = await client.query(
+    `INSERT INTO simulator_settings (draft_id, user_id, controlled_team_ids, team_strategies)
+     VALUES ($1, $2, $3, '{}')
+     RETURNING *`,
+    [draftId, userId, JSON.stringify(controlledTeamIds)]
+  );
+  return simulatorSettingsFromRow(inserted.rows[0], fallbackTeamId);
+}
+
+async function loadMockSimulatorState(client, draft, userId) {
+  await ensureDraftPicks(client, draft);
+  await ensureMockDraftPicks(client, draft.id, userId);
+  const [pickRows, playerRows] = await Promise.all([
+    client.query(
+      `SELECT mdp.id, mdp.player_id, mdp.pick_type, dp.round, dp.pick_number, dp.current_owner_team_id,
+        CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object(
+          'id', p.id, 'name', p.name, 'position', p.position, 'nflTeam', p.nfl_team, 'rank', p.rank
+        ) END AS player
+       FROM mock_draft_picks mdp
+       JOIN draft_picks dp ON dp.id = mdp.source_pick_id
+       LEFT JOIN players p ON p.id = mdp.player_id
+       WHERE mdp.draft_id = $1 AND mdp.mock_user_id = $2
+       ORDER BY dp.pick_number`,
+      [draft.id, userId]
+    ),
+    client.query(
+      `SELECT id, name, position, nfl_team AS "nflTeam", rank
+       FROM players
+       ORDER BY COALESCE(rank, 9999), name`
+    )
+  ]);
+
+  const picks = pickRows.rows.map((row) => ({
+    id: row.id,
+    playerId: row.player_id,
+    pickType: row.pick_type,
+    round: row.round,
+    pickNumber: row.pick_number,
+    currentOwnerTeamId: row.current_owner_team_id,
+    player: row.player
+  }));
+  const draftedPlayerIds = new Set(picks.filter((pickRow) => pickRow.playerId).map((pickRow) => pickRow.playerId));
+  return {
+    picks,
+    availablePlayers: playerRows.rows
+      .map((row) => ({ id: row.id, name: row.name, position: row.position, nflTeam: row.nflTeam, rank: row.rank }))
+      .filter((player) => !draftedPlayerIds.has(player.id)),
+    currentPick: picks.find((pickRow) => pickRow.playerId == null) ?? null
+  };
+}
+
+async function writeSimulatorReason(client, draftId, userId, reason) {
+  await client.query(
+    `UPDATE simulator_settings
+     SET updated_at = now()
+     WHERE draft_id = $1 AND user_id = $2`,
+    [draftId, userId]
+  );
+}
+
+async function autoPickOne(client, draft, user, settings, actor = {}, options = {}) {
+  const state = await loadMockSimulatorState(client, draft, user.id);
+  if (!state.currentPick) {
+    return { picked: false, reason: "Draft complete" };
+  }
+  if (!options.allowControlledTeams && settings.controlledTeamIds.includes(state.currentPick.currentOwnerTeamId)) {
+    return { picked: false, reason: "Next pick is controlled by you" };
+  }
+
+  const recommendation = chooseSimulatorPlayer({
+    availablePlayers: state.availablePlayers,
+    picks: state.picks,
+    teamId: state.currentPick.currentOwnerTeamId,
+    round: state.currentPick.round,
+    strategy: settings.teamStrategies?.[state.currentPick.currentOwnerTeamId] ?? settings.strategy,
+    randomness: settings.randomness
+  });
+  if (!recommendation?.player) {
+    return { picked: false, reason: "No available player found" };
+  }
+
+  await client.query(
+    "UPDATE mock_draft_picks SET player_id = $1, pick_type = 'drafted' WHERE id = $2 AND player_id IS NULL",
+    [recommendation.player.id, state.currentPick.id]
+  );
+  await recordDraftEvent(client, draft.id, "pick_made", {
+    pickId: state.currentPick.id,
+    playerId: recommendation.player.id,
+    teamId: state.currentPick.currentOwnerTeamId,
+    draftMode: "mock",
+    mockUserId: user.id,
+    simulator: true,
+    reason: recommendation.reason
+  }, actor);
+  await writeSimulatorReason(client, draft.id, user.id, recommendation.reason);
+  return {
+    picked: true,
+    reason: recommendation.reason,
+    pickId: state.currentPick.id,
+    playerId: recommendation.player.id,
+    playerName: recommendation.player.name
+  };
+}
+
+async function runSimulatorAction({ draftSeason = DEFAULT_DRAFT.season, user, actor = {}, action }) {
+  let summary = { pickedCount: 0, lastReason: "" };
+  await withDb(async (client) => {
+    const draft = await getOrCreateDraft(client, draftSeason);
+    if (draft.status !== "mock") {
+      throw new Error("Simulator only runs in Mock Draft mode.");
+    }
+    const settings = await ensureSimulatorSettings(client, draft.id, user.id, user.teamId);
+    if (!settings.enabled && action !== "reset") {
+      throw new Error("Enable the simulator before auto-picking.");
+    }
+
+    if (action === "reset") {
+      const result = await client.query(
+        `UPDATE mock_draft_picks
+         SET player_id = NULL, pick_type = 'open'
+         WHERE draft_id = $1 AND mock_user_id = $2 AND pick_type = 'drafted'
+         RETURNING id`,
+        [draft.id, user.id]
+      );
+      await recordDraftEvent(client, draft.id, "draft_reset", {
+        clearedPickCount: result.rowCount,
+        draftMode: "mock",
+        mockUserId: user.id,
+        simulator: true
+      }, actor);
+      summary = { pickedCount: 0, resetCount: result.rowCount, lastReason: "Simulation reset" };
+      return;
+    }
+
+    const maxIterations = action === "autocomplete" ? 250 : action === "round" ? 12 : action === "until-user" ? 250 : 1;
+    let startingRound = null;
+    for (let index = 0; index < maxIterations; index += 1) {
+      const state = await loadMockSimulatorState(client, draft, user.id);
+      if (!state.currentPick) {
+        break;
+      }
+      if (startingRound == null) {
+        startingRound = state.currentPick.round;
+      }
+      if (action === "round" && state.currentPick.round !== startingRound) {
+        break;
+      }
+      if ((action === "until-user" || action === "next") && settings.controlledTeamIds.includes(state.currentPick.currentOwnerTeamId)) {
+        break;
+      }
+
+      const result = await autoPickOne(client, draft, user, settings, actor, {
+        allowControlledTeams: action === "autocomplete"
+      });
+      if (!result.picked) {
+        summary.lastReason = result.reason;
+        break;
+      }
+      summary.pickedCount += 1;
+      summary.lastReason = result.reason;
+    }
+  });
+
+  return {
+    ...summary,
+    state: await getPostgresDraftState({ season: draftSeason, mockUserId: user.id }),
+    settings: await getSimulatorSettings(draftSeason, user)
+  };
+}
+
+export async function getSimulatorSettings(draftSeason = DEFAULT_DRAFT.season, user) {
+  return withDb(async (client) => {
+    const draft = await getOrCreateDraft(client, draftSeason);
+    const settings = await ensureSimulatorSettings(client, draft.id, user.id, user.teamId);
+    return {
+      ...settings,
+      draftMode: draft.status === "mock" ? "mock" : "real"
+    };
+  });
+}
+
+export async function updateSimulatorSettings(draftSeason = DEFAULT_DRAFT.season, user, input = {}) {
+  return withDb(async (client) => {
+    const draft = await getOrCreateDraft(client, draftSeason);
+    const controlledTeamIds = normalizeControlledTeamIds(input.controlledTeamIds, user.teamId);
+    const strategyTeamIds = Object.keys(input.teamStrategies ?? {}).filter((teamId) => UUID_PATTERN.test(String(teamId ?? "")));
+    const requestedTeamIds = Array.from(new Set([...controlledTeamIds, ...strategyTeamIds]));
+    const validTeams = requestedTeamIds.length
+      ? await client.query("SELECT id FROM teams WHERE id = ANY($1::uuid[])", [requestedTeamIds])
+      : { rows: [] };
+    const validRequestedTeamIds = validTeams.rows.map((row) => row.id);
+    const validRequestedTeamSet = new Set(validRequestedTeamIds);
+    const validControlledTeamIds = controlledTeamIds.filter((teamId) => validRequestedTeamSet.has(teamId));
+    const teamStrategies = normalizeTeamStrategies(input.teamStrategies, validRequestedTeamIds);
+    const result = await client.query(
+      `INSERT INTO simulator_settings (draft_id, user_id, enabled, controlled_team_ids, strategy, team_strategies, randomness, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       ON CONFLICT (draft_id, user_id)
+       DO UPDATE SET enabled = EXCLUDED.enabled, controlled_team_ids = EXCLUDED.controlled_team_ids,
+         strategy = EXCLUDED.strategy, team_strategies = EXCLUDED.team_strategies,
+         randomness = EXCLUDED.randomness, updated_at = now()
+       RETURNING *`,
+      [
+        draft.id,
+        user.id,
+        Boolean(input.enabled),
+        JSON.stringify(validControlledTeamIds.length ? validControlledTeamIds : normalizeControlledTeamIds([], user.teamId)),
+        normalizeSimulatorStrategy(input.strategy),
+        JSON.stringify(teamStrategies),
+        normalizeSimulatorRandomness(input.randomness)
+      ]
+    );
+    return {
+      ...simulatorSettingsFromRow(result.rows[0], user.teamId),
+      draftMode: draft.status === "mock" ? "mock" : "real"
+    };
+  });
+}
+
+export async function userCanMakeMockPick(draftSeason = DEFAULT_DRAFT.season, user, pickId, canManageDraft = false) {
+  if (canManageDraft) {
+    return true;
+  }
+  return withDb(async (client) => {
+    const draft = await getOrCreateDraft(client, draftSeason);
+    if (draft.status !== "mock") {
+      return true;
+    }
+    await ensureMockDraftPicks(client, draft.id, user.id);
+    const settings = await ensureSimulatorSettings(client, draft.id, user.id, user.teamId);
+    const pick = await client.query(
+      `SELECT dp.current_owner_team_id
+       FROM mock_draft_picks mdp
+       JOIN draft_picks dp ON dp.id = mdp.source_pick_id
+       WHERE mdp.draft_id = $1 AND mdp.mock_user_id = $2 AND mdp.id = $3`,
+      [draft.id, user.id, pickId]
+    );
+    return settings.controlledTeamIds.includes(pick.rows[0]?.current_owner_team_id);
+  });
+}
+
+export function autoPickSimulatorNext(args) {
+  return runSimulatorAction({ ...args, action: "next" });
+}
+
+export function autoPickSimulatorUntilUser(args) {
+  return runSimulatorAction({ ...args, action: "until-user" });
+}
+
+export function autoPickSimulatorRound(args) {
+  return runSimulatorAction({ ...args, action: "round" });
+}
+
+export function autocompleteSimulatorDraft(args) {
+  return runSimulatorAction({ ...args, action: "autocomplete" });
+}
+
+export function resetSimulatorDraft(args) {
+  return runSimulatorAction({ ...args, action: "reset" });
+}
+
 export async function makePostgresPick({ pickId, playerId, teamId, actor = {}, mockUserId = null, mockLobbyTeamId = null, draftSeason = DEFAULT_DRAFT.season }) {
   let resultDraftSeason = DEFAULT_DRAFT.season;
-  const mockBoardUserId = mockUserId ?? mockLobbyTeamId;
+  const mockBoardUserId = getMockBoardUserId({ mockUserId, mockLobbyTeamId });
   await withDb(async (client) => {
     const requestedDraft = await getOrCreateDraft(client, draftSeason);
     const requestedDraftMode = requestedDraft.status === "mock" ? "mock" : "real";
