@@ -1090,10 +1090,14 @@ async function ensureMockDraftPicks(client, draftId, mockUserId) {
 
   await client.query(
     `UPDATE mock_draft_picks mdp
-     SET player_id = CASE WHEN dp.pick_type = 'keeper' THEN dp.player_id ELSE mdp.player_id END,
+     SET player_id = CASE
+         WHEN dp.pick_type = 'keeper' THEN dp.player_id
+         WHEN mdp.pick_type <> 'drafted' THEN NULL
+         ELSE mdp.player_id
+       END,
        pick_type = CASE
          WHEN dp.pick_type = 'keeper' THEN 'keeper'
-         WHEN mdp.pick_type = 'keeper' THEN 'open'
+         WHEN mdp.pick_type <> 'drafted' THEN 'open'
          ELSE mdp.pick_type
        END
      FROM draft_picks dp
