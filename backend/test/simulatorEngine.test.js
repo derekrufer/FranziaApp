@@ -3,13 +3,23 @@ import assert from "node:assert/strict";
 import { chooseSimulatorPlayer } from "../src/simulatorEngine.js";
 
 const teamId = "team-a";
+let testPickNumber = 0;
 
 function player(id, rank, position) {
   return { id, name: id, rank, position, nflTeam: "FA" };
 }
 
+function choose(args) {
+  testPickNumber += 1;
+  return chooseSimulatorPlayer({
+    simulationSeed: "simulator-engine-test-seed",
+    pickNumber: testPickNumber,
+    ...args
+  });
+}
+
 test("simulator delays DST and K when ranked players are available early", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("dst-1", 1, "DST"),
       player("k-1", 2, "K"),
@@ -26,7 +36,7 @@ test("simulator delays DST and K when ranked players are available early", () =>
 });
 
 test("team needs strategy fills missing starters from drafted players and keepers", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("qb-1", 20, "QB"),
       player("wr-1", 21, "WR"),
@@ -52,7 +62,7 @@ test("team needs strategy fills missing starters from drafted players and keeper
 });
 
 test("zero RB avoids early running backs but can take them later", () => {
-  const early = chooseSimulatorPlayer({
+  const early = choose({
     availablePlayers: [player("rb-1", 5, "RB"), player("wr-1", 18, "WR")],
     picks: [],
     teamId,
@@ -60,7 +70,7 @@ test("zero RB avoids early running backs but can take them later", () => {
     strategy: "zero_rb",
     randomness: "low"
   });
-  const late = chooseSimulatorPlayer({
+  const late = choose({
     availablePlayers: [player("rb-1", 40, "RB"), player("wr-1", 75, "WR")],
     picks: [],
     teamId,
@@ -74,7 +84,7 @@ test("zero RB avoids early running backs but can take them later", () => {
 });
 
 test("team needs does not draft an early second QB when a keeper QB already fills the starter", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("qb-2", 12, "QB"),
       player("rb-1", 25, "RB"),
@@ -95,7 +105,7 @@ test("team needs does not draft an early second QB when a keeper QB already fill
 });
 
 test("future QB keeper blocks a round two QB recommendation", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("josh-allen", 21, "QB"),
       player("malik-nabers", 22, "WR"),
@@ -120,7 +130,7 @@ test("future QB keeper blocks a round two QB recommendation", () => {
 });
 
 test("three QB keepers hard-cap any later QB recommendation", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("jaxson-dart", 180, "QB"),
       player("rashid-shaheed", 144, "WR")
@@ -140,7 +150,7 @@ test("three QB keepers hard-cap any later QB recommendation", () => {
 });
 
 test("backup QB is allowed around round nine when flex starters are filled and value is reasonable", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("qb-2", 92, "QB"),
       player("wr-bench", 170, "WR")
@@ -165,7 +175,7 @@ test("backup QB is allowed around round nine when flex starters are filled and v
 });
 
 test("backup QB is blocked before round nine even when value is tempting", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("qb-2", 1, "QB"),
       player("wr-bench", 150, "WR")
@@ -200,7 +210,7 @@ test("backup TE is allowed around round eight but blocked before then", () => {
     { currentOwnerTeamId: teamId, player: player("flex-2", 88, "WR") }
   ];
 
-  const round7 = chooseSimulatorPlayer({
+  const round7 = choose({
     availablePlayers: [player("te-2", 1, "TE"), player("wr-bench", 120, "WR")],
     picks,
     teamId,
@@ -208,7 +218,7 @@ test("backup TE is allowed around round eight but blocked before then", () => {
     strategy: "best_available",
     randomness: "low"
   });
-  const round8 = chooseSimulatorPlayer({
+  const round8 = choose({
     availablePlayers: [player("te-2", 70, "TE"), player("wr-bench", 170, "WR")],
     picks,
     teamId,
@@ -222,7 +232,7 @@ test("backup TE is allowed around round eight but blocked before then", () => {
 });
 
 test("simulator never recommends a fourth QB", () => {
-  const recommendation = chooseSimulatorPlayer({
+  const recommendation = choose({
     availablePlayers: [
       player("qb-4", 1, "QB"),
       player("wr-1", 190, "WR")
@@ -254,7 +264,7 @@ test("third QB is blocked through round 13 and only allowed from round 14", () =
     { currentOwnerTeamId: teamId, player: player("flex-2", 88, "WR") }
   ];
 
-  const round13 = chooseSimulatorPlayer({
+  const round13 = choose({
     availablePlayers: [player("qb-3", 1, "QB"), player("wr-bench", 180, "WR")],
     picks,
     teamId,
@@ -262,7 +272,7 @@ test("third QB is blocked through round 13 and only allowed from round 14", () =
     strategy: "best_available",
     randomness: "low"
   });
-  const round14 = chooseSimulatorPlayer({
+  const round14 = choose({
     availablePlayers: [player("qb-3", 90, "QB"), player("wr-bench", 180, "WR")],
     picks,
     teamId,
@@ -276,7 +286,7 @@ test("third QB is blocked through round 13 and only allowed from round 14", () =
 });
 
 test("best available can take a first QB value but respects early second-QB cap", () => {
-  const firstQuarterback = chooseSimulatorPlayer({
+  const firstQuarterback = choose({
     availablePlayers: [player("qb-1", 1, "QB"), player("wr-1", 20, "WR")],
     picks: [],
     teamId,
@@ -284,7 +294,7 @@ test("best available can take a first QB value but respects early second-QB cap"
     strategy: "best_available",
     randomness: "low"
   });
-  const secondQuarterback = chooseSimulatorPlayer({
+  const secondQuarterback = choose({
     availablePlayers: [player("qb-2", 8, "QB"), player("wr-1", 30, "WR")],
     picks: [{ currentOwnerTeamId: teamId, player: player("qb-1", 1, "QB") }],
     teamId,
@@ -299,7 +309,7 @@ test("best available can take a first QB value but respects early second-QB cap"
 
 test("zero RB and WR heavy respect QB caps", () => {
   for (const strategy of ["zero_rb", "wr_heavy"]) {
-    const recommendation = chooseSimulatorPlayer({
+    const recommendation = choose({
       availablePlayers: [player("qb-2", 3, "QB"), player("wr-1", 40, "WR")],
       picks: [{ currentOwnerTeamId: teamId, player: player("keeper-qb", 2, "QB") }],
       teamId,
@@ -310,4 +320,38 @@ test("zero RB and WR heavy respect QB caps", () => {
 
     assert.notEqual(recommendation.player.position, "QB");
   }
+});
+
+test("simulator seed changes outcomes within a realistic candidate window", () => {
+  const availablePlayers = Array.from({ length: 24 }, (_, index) => player(`wr-${index + 1}`, index + 1, "WR"));
+  const picks = [];
+
+  const lowResults = new Set();
+  const highResults = new Set();
+  for (let index = 0; index < 30; index += 1) {
+    lowResults.add(chooseSimulatorPlayer({
+      availablePlayers,
+      picks,
+      teamId,
+      round: 1,
+      pickNumber: 1,
+      strategy: "balanced",
+      randomness: "low",
+      simulationSeed: `low-seed-${index}`
+    }).player.id);
+    highResults.add(chooseSimulatorPlayer({
+      availablePlayers,
+      picks,
+      teamId,
+      round: 1,
+      pickNumber: 1,
+      strategy: "balanced",
+      randomness: "high",
+      simulationSeed: `high-seed-${index}`
+    }).player.id);
+  }
+
+  assert.ok(lowResults.size > 1);
+  assert.ok(highResults.size > lowResults.size);
+  assert.ok([...highResults].some((id) => Number(id.replace("wr-", "")) > 5));
 });

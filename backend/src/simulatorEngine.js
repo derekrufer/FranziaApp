@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const STARTER_TARGETS = {
   QB: 1,
   RB: 2,
@@ -27,6 +29,33 @@ function seededNoise(seed) {
     hash = Math.imul(hash, 16777619);
   }
   return ((hash >>> 0) % 10000) / 10000;
+}
+
+export function createSimulationSeed() {
+  return `${Date.now()}-${randomUUID()}`;
+}
+
+export function createTeamPreferences(teamIds = [], seed = createSimulationSeed()) {
+  return teamIds.reduce((acc, teamId) => {
+    const rbTilt = seededNoise(`${seed}-${teamId}-rb-tilt`) - 0.5;
+    const wrTilt = seededNoise(`${seed}-${teamId}-wr-tilt`) - 0.5;
+    const qbTiming = seededNoise(`${seed}-${teamId}-qb-timing`) - 0.5;
+    const teTiming = seededNoise(`${seed}-${teamId}-te-timing`) - 0.5;
+    const riskTolerance = seededNoise(`${seed}-${teamId}-risk`);
+
+    acc[teamId] = {
+      positionBias: {
+        RB: Math.round(rbTilt * 18),
+        WR: Math.round(wrTilt * 18),
+        TE: Math.round(teTiming * 10),
+        QB: Math.round(qbTiming * 10)
+      },
+      qbRoundAdjustment: Math.round(qbTiming * 3),
+      teRoundAdjustment: Math.round(teTiming * 2),
+      riskTolerance
+    };
+    return acc;
+  }, {});
 }
 
 function pickBelongsToTeam(pick, teamId) {
@@ -79,9 +108,11 @@ function isExtremeValue(player, round, counts) {
   return rank <= expectedPickRank(round) - 36 && !flexNeedsBadlyUnmet(counts);
 }
 
-function shouldSkipCandidate(player, round, counts, strategy) {
+function shouldSkipCandidate(player, round, counts, strategy, preference = {}) {
   const position = player.position;
   const count = counts[position] ?? 0;
+  const qbRoundAdjustment = Number(preference.qbRoundAdjustment ?? 0);
+  const teRoundAdjustment = Number(preference.teRoundAdjustment ?? 0);
 
   if (position === "K" || position === "DST") {
     return count >= 1 || round < 16;
@@ -90,10 +121,10 @@ function shouldSkipCandidate(player, round, counts, strategy) {
     if (count >= 3) {
       return true;
     }
-    if (count >= 2 && round < 14) {
+    if (count >= 2 && round < Math.max(14, 14 + qbRoundAdjustment)) {
       return true;
     }
-    if (count >= 1 && round < 9) {
+    if (count >= 1 && round < Math.max(9, 9 + qbRoundAdjustment)) {
       return true;
     }
   }
@@ -101,7 +132,7 @@ function shouldSkipCandidate(player, round, counts, strategy) {
     if (count >= 3) {
       return true;
     }
-    if (count >= 1 && round < 8) {
+    if (count >= 1 && round < Math.max(8, 8 + teRoundAdjustment)) {
       return true;
     }
   }
@@ -139,7 +170,7 @@ function strategyBoost(position, round, strategy, need) {
   const mid = round <= 10;
 
   if (strategy === "best_available") {
-    return need * 8;
+    return need * 4;
   }
   if (strategy === "team_needs") {
     return need * 28;
@@ -155,7 +186,7 @@ function strategyBoost(position, round, strategy, need) {
       return -35;
     }
     if (position === "RB" && round >= 7) {
-      return 18;
+      return 42;
     }
     if ((position === "WR" || position === "TE" || position === "QB") && early) {
       return 16;
@@ -175,15 +206,46 @@ function latePositionPenalty(position, round) {
   return 0;
 }
 
+function randomnessProfile(randomness) {
+  return {
+    low: { rankVariance: 3, windowSize: 5, temperature: 7, scoreNoise: 2 },
+    medium: { rankVariance: 10, windowSize: 10, temperature: 15, scoreNoise: 5 },
+    high: { rankVariance: 20, windowSize: 18, temperature: 28, scoreNoise: 10 }
+  }[randomness] ?? { rankVariance: 10, windowSize: 10, temperature: 15, scoreNoise: 5 };
+}
+
+function weightedPick(candidates, seed, temperature) {
+  if (candidates.length <= 1) {
+    return candidates[0] ?? null;
+  }
+
+  const maxScore = Math.max(...candidates.map((candidate) => candidate.score));
+  const weighted = candidates.map((candidate) => ({
+    ...candidate,
+    weight: Math.exp((candidate.score - maxScore) / temperature)
+  }));
+  const totalWeight = weighted.reduce((sum, candidate) => sum + candidate.weight, 0);
+  let cursor = seededNoise(seed) * totalWeight;
+
+  for (const candidate of weighted) {
+    cursor -= candidate.weight;
+    if (cursor <= 0) {
+      return candidate;
+    }
+  }
+
+  return weighted[weighted.length - 1] ?? null;
+}
+
 function reasonForPick(player, strategy, need) {
   if (strategy === "zero_rb") {
     return "Strategy: Zero RB";
   }
   if (strategy === "rb_heavy" && player.position === "RB") {
-    return "Strategy: WR Heavy";
+    return "Strategy: RB Heavy";
   }
   if (strategy === "wr_heavy" && player.position === "WR") {
-    return "Strategy: RB Heavy";
+    return "Strategy: WR Heavy";
   }
   if (need > 0.75) {
     return `Best ${player.position} need`;
@@ -191,27 +253,39 @@ function reasonForPick(player, strategy, need) {
   return `Top ranked ${player.position}`;
 }
 
-export function chooseSimulatorPlayer({ availablePlayers = [], picks = [], teamId, round = 1, strategy = "balanced", randomness = "medium" }) {
+export function chooseSimulatorPlayer({
+  availablePlayers = [],
+  picks = [],
+  teamId,
+  round = 1,
+  pickNumber = 0,
+  strategy = "balanced",
+  randomness = "medium",
+  simulationSeed = createSimulationSeed(),
+  teamPreference = {}
+}) {
   const normalizedStrategy = normalizeStrategy(strategy);
   const normalizedRandomness = normalizeRandomness(randomness);
   const counts = rosterCounts(draftedForTeam(picks, teamId));
-  const varianceByLevel = {
-    low: 3,
-    medium: 9,
-    high: 18
-  };
-  const variance = varianceByLevel[normalizedRandomness];
+  const profile = randomnessProfile(normalizedRandomness);
+  const positionBias = teamPreference.positionBias ?? {};
+  const riskWindowBonus = Math.round(Number(teamPreference.riskTolerance ?? 0.5) * 3);
 
   const scored = availablePlayers
     .filter((player) => player.id && player.rank != null)
-    .filter((player) => !shouldSkipCandidate(player, round, counts, normalizedStrategy))
+    .filter((player) => !shouldSkipCandidate(player, round, counts, normalizedStrategy, teamPreference))
     .map((player) => {
-      const rankScore = Math.max(0, 320 - Number(player.rank ?? 320));
+      const baseRank = Number(player.rank ?? 320);
+      const rankNoise = (seededNoise(`${simulationSeed}-${teamId}-${pickNumber}-${player.id}-rank`) - 0.5) * profile.rankVariance * 2;
+      const effectiveRank = Math.max(1, baseRank + rankNoise);
+      const rankScore = Math.max(0, 320 - effectiveRank);
       const need = positionNeed(player.position, counts);
-      const randomScore = (seededNoise(`${teamId}-${round}-${player.id}-${normalizedRandomness}`) - 0.5) * variance;
+      const randomScore = (seededNoise(`${simulationSeed}-${teamId}-${pickNumber}-${player.id}-score`) - 0.5) * profile.scoreNoise * 2;
+      const preferenceBoost = Number(positionBias[player.position] ?? 0);
       const score =
         rankScore
         + strategyBoost(player.position, round, normalizedStrategy, need)
+        + preferenceBoost
         - latePositionPenalty(player.position, round)
         - onesiePenalty(player, round, counts, normalizedStrategy)
         + randomScore;
@@ -219,10 +293,15 @@ export function chooseSimulatorPlayer({ availablePlayers = [], picks = [], teamI
       return {
         player,
         score,
+        baseRank,
+        effectiveRank,
+        randomScore,
+        preferenceBoost,
         reason: reasonForPick(player, normalizedStrategy, need)
       };
     })
     .sort((a, b) => b.score - a.score || (a.player.rank ?? 9999) - (b.player.rank ?? 9999));
 
-  return scored[0] ?? null;
+  const candidateWindow = scored.slice(0, Math.min(scored.length, profile.windowSize + riskWindowBonus));
+  return weightedPick(candidateWindow, `${simulationSeed}-${teamId}-${pickNumber}-choice`, profile.temperature);
 }

@@ -135,11 +135,15 @@ CREATE TABLE IF NOT EXISTS simulator_settings (
   strategy TEXT NOT NULL DEFAULT 'balanced',
   team_strategies JSONB NOT NULL DEFAULT '{}',
   randomness TEXT NOT NULL DEFAULT 'medium',
+  simulation_seed TEXT,
+  simulation_preferences JSONB NOT NULL DEFAULT '{}',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (draft_id, user_id)
 );
 
 ALTER TABLE simulator_settings ADD COLUMN IF NOT EXISTS team_strategies JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE simulator_settings ADD COLUMN IF NOT EXISTS simulation_seed TEXT;
+ALTER TABLE simulator_settings ADD COLUMN IF NOT EXISTS simulation_preferences JSONB NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS fleaflicker_sync_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

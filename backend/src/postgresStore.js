@@ -1,5 +1,5 @@
 import { getKeeperCost, getKeeperOptimizerFields, validateKeeperSelections } from "./keeperEngine.js";
-import { chooseSimulatorPlayer } from "./simulatorEngine.js";
+import { chooseSimulatorPlayer, createSimulationSeed, createTeamPreferences } from "./simulatorEngine.js";
 import { numberOrNull, parseCsv, parseCsvRows, pick } from "./csv.js";
 import { getDatabaseStatus, withDb } from "./db.js";
 import { getMockBoardUserId } from "./mockDraftScope.js";
@@ -2098,6 +2098,8 @@ function simulatorSettingsFromRow(row, fallbackTeamId = null) {
       strategy: "balanced",
       teamStrategies: {},
       randomness: "medium",
+      simulationSeed: "",
+      simulationPreferences: {},
       lastAutoPickReason: ""
     };
   }
@@ -2108,6 +2110,8 @@ function simulatorSettingsFromRow(row, fallbackTeamId = null) {
     strategy: normalizeSimulatorStrategy(row.strategy),
     teamStrategies: normalizeTeamStrategies(row.team_strategies),
     randomness: normalizeSimulatorRandomness(row.randomness),
+    simulationSeed: row.simulation_seed ?? "",
+    simulationPreferences: row.simulation_preferences ?? {},
     lastAutoPickReason: row.last_auto_pick_reason ?? ""
   };
 }
@@ -2182,13 +2186,44 @@ async function writeSimulatorReason(client, draftId, userId, reason) {
   );
 }
 
-async function autoPickOne(client, draft, user, settings, actor = {}, options = {}) {
-  const state = await loadMockSimulatorState(client, draft, user.id);
+async function beginSimulatorRun(client, draftId, userId, teamIds = []) {
+  const simulationSeed = createSimulationSeed();
+  const simulationPreferences = createTeamPreferences(teamIds, simulationSeed);
+  const result = await client.query(
+    `UPDATE simulator_settings
+     SET simulation_seed = $3, simulation_preferences = $4, updated_at = now()
+     WHERE draft_id = $1 AND user_id = $2
+     RETURNING *`,
+    [draftId, userId, simulationSeed, JSON.stringify(simulationPreferences)]
+  );
+  return {
+    simulationSeed,
+    simulationPreferences,
+    row: result.rows[0] ?? null
+  };
+}
+
+function advanceSimulatorState(state, pickId, player) {
+  const picks = state.picks.map((pick) => (
+    pick.id === pickId
+      ? { ...pick, playerId: player.id, player, pickType: "drafted" }
+      : pick
+  ));
+  return {
+    ...state,
+    picks,
+    availablePlayers: state.availablePlayers.filter((candidate) => candidate.id !== player.id),
+    currentPick: picks.find((pick) => pick.playerId == null) ?? null
+  };
+}
+
+async function autoPickOne(client, draft, user, settings, actor = {}, options = {}, simulatorState = null) {
+  const state = simulatorState ?? await loadMockSimulatorState(client, draft, user.id);
   if (!state.currentPick) {
-    return { picked: false, reason: "Draft complete" };
+    return { picked: false, reason: "Draft complete", state };
   }
   if (!options.allowControlledTeams && settings.controlledTeamIds.includes(state.currentPick.currentOwnerTeamId)) {
-    return { picked: false, reason: "Next pick is controlled by you" };
+    return { picked: false, reason: "Next pick is controlled by you", state };
   }
 
   const recommendation = chooseSimulatorPlayer({
@@ -2196,11 +2231,14 @@ async function autoPickOne(client, draft, user, settings, actor = {}, options = 
     picks: state.picks,
     teamId: state.currentPick.currentOwnerTeamId,
     round: state.currentPick.round,
+    pickNumber: state.currentPick.pickNumber,
     strategy: settings.teamStrategies?.[state.currentPick.currentOwnerTeamId] ?? settings.strategy,
-    randomness: settings.randomness
+    randomness: settings.randomness,
+    simulationSeed: settings.simulationSeed,
+    teamPreference: settings.simulationPreferences?.[state.currentPick.currentOwnerTeamId] ?? {}
   });
   if (!recommendation?.player) {
-    return { picked: false, reason: "No available player found" };
+    return { picked: false, reason: "No available player found", state };
   }
 
   await client.query(
@@ -2216,13 +2254,14 @@ async function autoPickOne(client, draft, user, settings, actor = {}, options = 
     simulator: true,
     reason: recommendation.reason
   }, actor);
-  await writeSimulatorReason(client, draft.id, user.id, recommendation.reason);
+  const nextState = advanceSimulatorState(state, state.currentPick.id, recommendation.player);
   return {
     picked: true,
     reason: recommendation.reason,
     pickId: state.currentPick.id,
     playerId: recommendation.player.id,
-    playerName: recommendation.player.name
+    playerName: recommendation.player.name,
+    state: nextState
   };
 }
 
@@ -2233,7 +2272,7 @@ async function runSimulatorAction({ draftSeason = DEFAULT_DRAFT.season, user, ac
     if (draft.status !== "mock") {
       throw new Error("Simulator only runs in Mock Draft mode.");
     }
-    const settings = await ensureSimulatorSettings(client, draft.id, user.id, user.teamId);
+    let settings = await ensureSimulatorSettings(client, draft.id, user.id, user.teamId);
     if (!settings.enabled && action !== "reset") {
       throw new Error("Enable the simulator before auto-picking.");
     }
@@ -2252,36 +2291,49 @@ async function runSimulatorAction({ draftSeason = DEFAULT_DRAFT.season, user, ac
         mockUserId: user.id,
         simulator: true
       }, actor);
+      await beginSimulatorRun(client, draft.id, user.id, []);
       summary = { pickedCount: 0, resetCount: result.rowCount, lastReason: "Simulation reset" };
       return;
     }
 
+    const teamIds = (await client.query("SELECT id FROM teams ORDER BY created_at, name")).rows.map((row) => row.id);
+    const runState = await beginSimulatorRun(client, draft.id, user.id, teamIds);
+    settings = {
+      ...settings,
+      simulationSeed: runState.simulationSeed,
+      simulationPreferences: runState.simulationPreferences
+    };
+
     const maxIterations = action === "autocomplete" ? 250 : action === "round" ? 12 : action === "until-user" ? 250 : 1;
     let startingRound = null;
+    let simulatorState = await loadMockSimulatorState(client, draft, user.id);
     for (let index = 0; index < maxIterations; index += 1) {
-      const state = await loadMockSimulatorState(client, draft, user.id);
-      if (!state.currentPick) {
+      if (!simulatorState.currentPick) {
         break;
       }
       if (startingRound == null) {
-        startingRound = state.currentPick.round;
+        startingRound = simulatorState.currentPick.round;
       }
-      if (action === "round" && state.currentPick.round !== startingRound) {
+      if (action === "round" && simulatorState.currentPick.round !== startingRound) {
         break;
       }
-      if ((action === "until-user" || action === "next") && settings.controlledTeamIds.includes(state.currentPick.currentOwnerTeamId)) {
+      if ((action === "until-user" || action === "next") && settings.controlledTeamIds.includes(simulatorState.currentPick.currentOwnerTeamId)) {
         break;
       }
 
       const result = await autoPickOne(client, draft, user, settings, actor, {
         allowControlledTeams: action === "autocomplete"
-      });
+      }, simulatorState);
       if (!result.picked) {
         summary.lastReason = result.reason;
         break;
       }
+      simulatorState = result.state;
       summary.pickedCount += 1;
       summary.lastReason = result.reason;
+    }
+    if (summary.lastReason) {
+      await writeSimulatorReason(client, draft.id, user.id, summary.lastReason);
     }
   });
 
