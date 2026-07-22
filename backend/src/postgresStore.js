@@ -753,17 +753,21 @@ async function upsertPlayer(client, { name, position = "UNK", nflTeam = "FA", by
   const byName = await client.query(
     `SELECT id FROM players
      WHERE lower(name) = lower($1)
-       OR trim(regexp_replace(
-         regexp_replace(
-           regexp_replace(lower(name), '[^a-z0-9]+', ' ', 'g'),
-           '(^| )(jr|sr|ii|iii|iv|v)( |$)',
+       OR regexp_replace(
+         trim(regexp_replace(
+           regexp_replace(
+             regexp_replace(lower(name), '[^a-z0-9]+', ' ', 'g'),
+             '(^| )(jr|sr|ii|iii|iv|v)( |$)',
+             ' ',
+             'g'
+           ),
+           '\\s+',
            ' ',
            'g'
-         ),
-         '\\s+',
-         ' ',
-         'g'
-       )) = $2
+         )),
+         '^kenneth( |$)',
+         'kenny\\1'
+       ) = $2
      ORDER BY rank NULLS LAST, created_at
      LIMIT 1`,
     [cleanName, normalizedCleanName]
@@ -843,8 +847,8 @@ function normalizeComparableName(value) {
     .trim();
 }
 
-function normalizePlayerName(value) {
-  const normalized = normalizeComparableName(value)
+export function normalizePlayerName(value) {
+  let normalized = normalizeComparableName(value)
     .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -852,6 +856,11 @@ function normalizePlayerName(value) {
   if (normalized === "hollywood brown") {
     return "marquise brown";
   }
+
+  // Ranking and roster sources do not always agree on formal first names.
+  // Canonicalize known aliases so imports reuse an existing player row and
+  // Player Matching can surface any duplicates that already exist.
+  normalized = normalized.replace(/^kenneth\b/, "kenny");
 
   return normalized;
 }
@@ -2821,17 +2830,21 @@ export async function getPlayerMatchingReview() {
           position,
           nfl_team,
           rank,
-          trim(regexp_replace(
-            regexp_replace(
-              regexp_replace(lower(name), '[^a-z0-9]+', ' ', 'g'),
-              '(^| )(jr|sr|ii|iii|iv|v)( |$)',
+          regexp_replace(
+            trim(regexp_replace(
+              regexp_replace(
+                regexp_replace(lower(name), '[^a-z0-9]+', ' ', 'g'),
+                '(^| )(jr|sr|ii|iii|iv|v)( |$)',
+                ' ',
+                'g'
+              ),
+              '\\s+',
               ' ',
               'g'
-            ),
-            '\\s+',
-            ' ',
-            'g'
-          )) AS normalized_name
+            )),
+            '^kenneth( |$)',
+            'kenny\\1'
+          ) AS normalized_name
         FROM players
       )
       SELECT normalized_name,

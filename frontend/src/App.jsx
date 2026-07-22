@@ -569,8 +569,9 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <main className="app-shell">
-        <header className="topbar">
+      <main className="app-shell login-shell">
+        <header className="login-brand">
+          <div className="login-brand-mark">F</div>
           <div>
             <p className="eyebrow">RotoBaller Keeper League</p>
             <h1>Franzia Keeper Draft</h1>
@@ -580,6 +581,7 @@ export default function App() {
           database={state.database}
           currentUser={currentUser}
           authToken={authToken}
+          draftSeason={state.draft?.season ?? selectedDraftSeason}
           onAuthenticated={handleAuthenticated}
           onLoggedOut={handleLoggedOut}
         />
@@ -649,6 +651,7 @@ export default function App() {
               database={state.database}
               currentUser={currentUser}
               authToken={authToken}
+              draftSeason={state.draft?.season ?? selectedDraftSeason}
               onAuthenticated={handleAuthenticated}
               onLoggedOut={handleLoggedOut}
             />

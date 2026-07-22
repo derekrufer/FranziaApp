@@ -1,29 +1,30 @@
 import React, { useState } from "react";
-import { loginAccount, logoutAccount, registerAccount, setAccountPassword } from "../../api.js";
+import { LockKeyhole, Mail, UserRound } from "lucide-react";
+import { loginAccount, logoutAccount, registerAccount } from "../../api.js";
 
-export function AccountAccessPanel({ database, currentUser, authToken, onAuthenticated, onLoggedOut }) {
+export function AccountAccessPanel({ database, currentUser, authToken, draftSeason, onAuthenticated, onLoggedOut }) {
   const [authMode, setAuthMode] = useState("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
 
-  async function handleAuth(action) {
+  async function handleAuth(event) {
+    event.preventDefault();
+    const action = authMode === "register" ? "register" : "login";
     setBusyAction(action);
-    setMessage("");
+    setNotice(null);
     try {
       const result = action === "register"
         ? await registerAccount(name, email, password)
-        : action === "set-password"
-          ? await setAccountPassword(email, password)
-          : await loginAccount(email, password);
+        : await loginAccount(email, password);
       onAuthenticated(result);
       setName("");
       setPassword("");
-      setMessage(action === "register" ? "Account created and logged in." : action === "set-password" ? "Password set and logged in." : "Logged in.");
+      setNotice({ type: "success", text: action === "register" ? "Account created and logged in." : "Logged in." });
     } catch (caught) {
-      setMessage(caught.response?.data?.error ?? caught.message);
+      setNotice({ type: "error", text: caught.response?.data?.error ?? caught.message });
     } finally {
       setBusyAction("");
     }
@@ -31,105 +32,143 @@ export function AccountAccessPanel({ database, currentUser, authToken, onAuthent
 
   async function handleLogout() {
     setBusyAction("logout");
-    setMessage("");
+    setNotice(null);
     try {
       await logoutAccount(authToken);
       onLoggedOut();
-      setMessage("Logged out.");
     } catch (caught) {
-      setMessage(caught.response?.data?.error ?? caught.message);
+      setNotice({ type: "error", text: caught.response?.data?.error ?? caught.message });
     } finally {
       setBusyAction("");
     }
   }
 
-  return (
-    <section className="commissioner-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Account</p>
-          <h2>{authMode === "register" ? "Create Account" : "Login"}</h2>
-        </div>
-      </div>
-      <p className="panel-note">
-        {authMode === "register"
-          ? "Create an account to join the draft. The first registered account becomes the initial commissioner."
-          : "Log in to make picks, manage keepers, sync Fleaflicker data, or use commissioner tools based on your account permissions."}
-      </p>
+  function switchMode(mode) {
+    setAuthMode(mode);
+    setNotice(null);
+    setPassword("");
+  }
 
-      {currentUser ? (
+  if (currentUser) {
+    return (
+      <section className="commissioner-panel auth-session-card">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Account</p>
+            <h2>Signed in</h2>
+          </div>
+        </div>
         <div className="account-session">
           <div>
             <strong>{currentUser.displayName}</strong>
             <span>{currentUser.email}</span>
             <small>{currentUser.permissions?.length ? currentUser.permissions.join(", ") : "normal user"}</small>
           </div>
-          <button className="secondary-action" disabled={busyAction === "logout"} onClick={handleLogout}>
+          <button type="button" className="secondary-action" disabled={busyAction === "logout"} onClick={handleLogout}>
             {busyAction === "logout" ? "Logging out..." : "Log Out"}
           </button>
         </div>
-      ) : (
-        <div className="auth-grid">
-          <div className="auth-mode-switch">
-            <button type="button" className={authMode === "login" ? "active" : ""} disabled={Boolean(busyAction)} onClick={() => {
-              setAuthMode("login");
-              setMessage("");
-            }}>
-              Login
-            </button>
-            <button type="button" className={authMode === "register" ? "active" : ""} disabled={Boolean(busyAction)} onClick={() => {
-              setAuthMode("register");
-              setMessage("");
-            }}>
-              Create Account
-            </button>
-          </div>
-          {authMode === "register" && (
-            <label>
-              Name
-              <input value={name} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setName(event.target.value)} />
-            </label>
-          )}
-          <label>
-            Email
-            <input value={email} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setEmail(event.target.value)} />
-          </label>
-          <label>
-            Password
-            <input type="password" value={password} disabled={!database?.connected || Boolean(busyAction)} onChange={(event) => setPassword(event.target.value)} />
-          </label>
-          <div className="auth-actions">
-            {authMode === "register" ? (
-              <button className="primary-action" disabled={!database?.connected || Boolean(busyAction) || !name || !email || !password} onClick={() => handleAuth("register")}>
-                {busyAction === "register" ? "Creating..." : "Create Account"}
-              </button>
-            ) : (
-              <>
-                <button className="secondary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("set-password")}>
-                  {busyAction === "set-password" ? "Setting..." : "Set Password"}
-                </button>
-                <button className="primary-action" disabled={!database?.connected || Boolean(busyAction) || !email || !password} onClick={() => handleAuth("login")}>
-                  {busyAction === "login" ? "Logging in..." : "Log In"}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+        {notice?.type === "error" && <div className="error-banner auth-alert" role="alert">{notice.text}</div>}
+      </section>
+    );
+  }
 
-      {!database?.connected && <div className="import-message">PostgreSQL is required for account access.</div>}
-      {message && <div className="import-message">{message}</div>}
+  const databaseUnavailable = !database?.connected;
+  const submitting = Boolean(busyAction);
+  const formIncomplete = !email || !password || (authMode === "register" && !name);
+
+  return (
+    <section className="auth-card" aria-labelledby="auth-title">
+      <div className="auth-card-accent" />
+      <header className="auth-card-header">
+        <div className="auth-season">{draftSeason} Draft Season</div>
+        <p className="eyebrow">RotoBaller Keeper League</p>
+        <h2 id="auth-title">{authMode === "register" ? "Create your account" : "Welcome back"}</h2>
+        <p>
+          {authMode === "register"
+            ? "Create an account to join the Franzia Keeper Draft."
+            : "Sign in to manage your keepers and enter the draft room."}
+        </p>
+      </header>
+
+      <form className="auth-form" onSubmit={handleAuth}>
+        {authMode === "register" && (
+          <label className="auth-field">
+            <span>Name</span>
+            <span className="auth-input-wrap">
+              <UserRound size={20} aria-hidden="true" />
+              <input
+                autoComplete="name"
+                value={name}
+                disabled={databaseUnavailable || submitting}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Your name"
+                required
+              />
+            </span>
+          </label>
+        )}
+
+        <label className="auth-field">
+          <span>Email</span>
+          <span className="auth-input-wrap">
+            <Mail size={20} aria-hidden="true" />
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              disabled={databaseUnavailable || submitting}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              autoFocus
+              required
+            />
+          </span>
+        </label>
+
+        <label className="auth-field">
+          <span>Password</span>
+          <span className="auth-input-wrap">
+            <LockKeyhole size={20} aria-hidden="true" />
+            <input
+              type="password"
+              autoComplete={authMode === "register" ? "new-password" : "current-password"}
+              value={password}
+              disabled={databaseUnavailable || submitting}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Enter your password"
+              required
+            />
+          </span>
+        </label>
+
+        {databaseUnavailable && <div className="import-message auth-alert" role="status">PostgreSQL is required for account access.</div>}
+        {notice?.type === "error" && <div className="error-banner auth-alert" role="alert">{notice.text}</div>}
+        {notice?.type === "success" && <div className="import-message auth-alert" role="status">{notice.text}</div>}
+
+        <button className="primary-action auth-submit" disabled={databaseUnavailable || submitting || formIncomplete} type="submit">
+          {busyAction === "register" ? "Creating account..." : busyAction === "login" ? "Signing in..." : authMode === "register" ? "Create Account" : "Log In"}
+        </button>
+      </form>
+
+      <div className="auth-secondary-action">
+        <span>{authMode === "register" ? "Already have an account?" : "New to the league?"}</span>
+        <button type="button" className="secondary-action" disabled={submitting} onClick={() => switchMode(authMode === "register" ? "login" : "register")}>
+          {authMode === "register" ? "Back to Login" : "Create Account"}
+        </button>
+      </div>
     </section>
   );
 }
 
-export function LoginPage({ database, currentUser, authToken, onAuthenticated, onLoggedOut }) {
+export function LoginPage({ database, currentUser, authToken, draftSeason, onAuthenticated, onLoggedOut }) {
   return (
     <section className="login-page">
       <AccountAccessPanel
         database={database}
         currentUser={currentUser}
         authToken={authToken}
+        draftSeason={draftSeason}
         onAuthenticated={onAuthenticated}
         onLoggedOut={onLoggedOut}
       />
